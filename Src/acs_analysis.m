@@ -25,7 +25,7 @@ Env.rho = 1.225;                        % Air density [kg/m^3]
 % Propulsive Paramters
 Prop.T_max = UAM.m * 2 / 6 * Env.g;     % Maximum thrust [N]
 Prop.T_min = 0;                         % Minimum thrust [N]
-Prop.cT = 0.02;                         % Moment to thrust ratio
+Prop.cT = 0.03;                         % Moment to thrust ratio
 
 % Control Effectiveness Matrix
 % Configuration 1
