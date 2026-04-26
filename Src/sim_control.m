@@ -51,6 +51,15 @@ CMD9 = [ 0  deg2rad(  0)  deg2rad(  0)  deg2rad(  0)];  % 45 ≤ t < 50 s
 %% Simulation Setting
 % Simulation Config.
 CONFIG.act_saturation = 1; % Activate Thrust Saturation
+CONFIG.fault          = 1; % Activate LOE fault injection (0: normal, 1: fault)
+
+% Fault-aware effectiveness matrix
+LOE_diag = diag(1 - LOE);
+if CONFIG.fault
+    B_eff = UAM.B * LOE_diag;
+else
+    B_eff = UAM.B;
+end
 
 % Simulation Time
 tf = 60;
@@ -163,7 +172,7 @@ for i = 1:num_step
 
     % Control Allocation
     virtual_ctrl_cmd = [Fz_cmd; L_cmd; M_cmd; N_cmd];
-    T_cmd = pinv(UAM.B) * virtual_ctrl_cmd;
+    T_cmd = pinv(B_eff) * virtual_ctrl_cmd;
 
     % Motor Dynamics (1st-order)
     T_dot = (1/Prop.tau)*(T_cmd - T);
@@ -173,7 +182,8 @@ for i = 1:num_step
     end
 
     % Equations of Motion & Euler Integration
-    X_dot = eom(X, T, UAM, Env);
+    T_eff = LOE_diag * T;   % Actual thrust after LOE (= T when CONFIG.fault = 0)
+    X_dot = eom(X, T_eff, UAM, Env);
     X     = X + X_dot * dt;
     X(IDX.psi) = wrapToPi(X(IDX.psi));
 
@@ -193,8 +203,8 @@ for i = 1:num_step
     outsim.Ctrl_cmd(:, i)   = virtual_ctrl_cmd;
     outsim.Rate_cmd(:, i)   = [p_cmd; q_cmd; r_cmd];
     outsim.V_cmd(:, i)      = [0; 0; vz_cmd];
-    outsim.Thrust(:, i)     = T;
-    outsim.Thrust_cmd(:, i) = T_cmd;
+    outsim.Thrust(:, i)     = T_eff;  % Actual effective thrust after LOE
+    outsim.Thrust_cmd(:, i) = T_cmd; % Allocator command (before LOE)
 end
 
 
@@ -337,6 +347,28 @@ for mi = 1:6
     if mi >= 5, xlabel('Time [s]'); end
     if mi == 1
         legend('Actual','Command','T_{max}','Location','best')
+    end
+end
+
+% ── Figure 7: Virtual Control Command vs Actual ───────────────────────────
+% Actual virtual control: B * T_eff (T_eff already stored in outsim.Thrust)
+vc_actual  = UAM.B * outsim.Thrust;       % [4 x num_step]
+vc_cmd     = outsim.Ctrl_cmd;             % [4 x num_step]
+
+vc_labels  = {'Fz [N]', 'L [Nm]', 'M [Nm]', 'N [Nm]'};
+vc_titles  = {'Fz', 'L', 'M', 'N'};
+
+figure('Name','Virtual Control')
+for vi = 1:4
+    subplot(2, 2, vi)
+    plot(t_vec, vc_actual(vi,:), 'b',  'LineWidth', 1.2); hold on
+    plot(t_vec, vc_cmd(vi,:),    'r--','LineWidth', 1.0)
+    grid on
+    ylabel(vc_labels{vi})
+    title(vc_titles{vi})
+    if vi >= 3, xlabel('Time [s]'); end
+    if vi == 1
+        legend('Actual','Command','Location','best')
     end
 end
 

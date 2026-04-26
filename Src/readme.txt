@@ -1,5 +1,9 @@
-	main_sim.m
-Main simulation file
+	sim_control.m
+Basic PI controller implementation and simulation file.
+Attitude and altitude control.
+	
+	sim_path_following.m
+Based on sim_control.m, path following method is added.
 
 	acs_anlaysis.m
 ACS(attainable control set) analysis file.
