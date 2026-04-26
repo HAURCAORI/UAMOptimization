@@ -126,6 +126,15 @@ i_p = 0;  i_q = 0;  i_r = 0;
 i_vz = 0;
 i_vx = 0;  i_vy = 0;
 
+
+%% ── Loss ────────────────────────────────────────────────────────
+% This will be added later.
+loss.pig = 0;
+loss.cow = 0;
+loss.chicken = 0;
+loss.duck = 0;
+loss.sheep = 0;
+
 %% ── Main Loop ────────────────────────────────────────────────────────────
 fprintf('Running simulation  (tf = %.0f s, %d steps) ...\n', tf, num_step);
 tic
