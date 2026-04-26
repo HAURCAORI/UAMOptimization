@@ -316,11 +316,11 @@ plot3(pos_x,   pos_y,   alt_h,     'b-',  'LineWidth', 1.5)
 plot3(pos_x(1),  pos_y(1),  alt_h(1),  'go', 'MarkerSize', 8, 'MarkerFaceColor','g')
 plot3(pos_x(end),pos_y(end),alt_h(end),'rs', 'MarkerSize', 8, 'MarkerFaceColor','r')
 grid on; xlabel('X [m]'); ylabel('Y [m]'); zlabel('Altitude [m]')
-title('3D Trajectory – Figure-8')
+title('3D Trajectory')
 legend('Reference','Actual','Start','End','Location','best')
 view(45, 30)
 
-% ── Figure 2: XY Top-down (figure-8 shape) ───────────────────────────────
+% ── Figure 2: XY Top-down ───────────────────────────────
 figure('Name','XY Trajectory')
 plot(x_ref_h, y_ref_h, 'r--', 'LineWidth', 1.2); hold on
 plot(pos_x,   pos_y,   'b-',  'LineWidth', 1.5)
@@ -328,7 +328,7 @@ plot(pos_x(1),  pos_y(1),  'go', 'MarkerSize', 8, 'MarkerFaceColor','g')
 plot(pos_x(end),pos_y(end),'rs', 'MarkerSize', 8, 'MarkerFaceColor','r')
 grid on; axis equal
 xlabel('X [m]'); ylabel('Y [m]')
-title('Top-down View – Figure-8')
+title('Top-down View')
 legend('Reference','Actual','Start','End','Location','best')
 
 % ── Figure 3: Position vs. Reference ─────────────────────────────────────
@@ -336,7 +336,7 @@ figure('Name','Position')
 subplot(3,2,1)
 plot(t_vec, pos_x,   'b',  'LineWidth',1.2); hold on
 plot(t_vec, x_ref_h, 'r--','LineWidth',1.0)
-xline(fig8.t_start,'k:'); grid on; ylabel('X [m]'); title('Position vs. Reference')
+xline(fig8.t_start,'k:'); grid on; ylabel('X [m]'); title('Position')
 legend('Actual','Reference','Location','best')
 
 subplot(3,2,2)
@@ -396,7 +396,7 @@ subplot(3,1,1)
 plot(t_vec, phi_h,       'b',  'LineWidth',1.2); hold on
 plot(t_vec, phi_cmd_h,   'r--','LineWidth',1.0)
 xline(fig8.t_start,'k:'); grid on
-ylabel('\phi [deg]'); title('Attitude vs. Command')
+ylabel('\phi [deg]'); title('Attitude')
 legend('Actual','Command','Location','best')
 
 subplot(3,1,2)
@@ -419,7 +419,7 @@ subplot(3,1,1)
 plot(t_vec, p_h,     'b',  'LineWidth',1.2); hold on
 plot(t_vec, p_cmd_h, 'r--','LineWidth',1.0)
 xline(fig8.t_start,'k:'); grid on
-ylabel('p [deg/s]'); title('Angular Rate vs. Command')
+ylabel('p [deg/s]'); title('Angular Rate')
 legend('Actual','Command','Location','best')
 
 subplot(3,1,2)
