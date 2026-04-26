@@ -136,9 +136,6 @@ loss.duck = 0;
 loss.sheep = 0;
 
 %% ── Main Loop ────────────────────────────────────────────────────────────
-fprintf('Running simulation  (tf = %.0f s, %d steps) ...\n', tf, num_step);
-tic
-
 for i = 1:num_step
     time = t_vec(i);
 
@@ -274,8 +271,6 @@ for i = 1:num_step
     outsim.Thrust_cmd(:, i) = T_cmd;
 end
 
-elapsed = toc;
-fprintf('Simulation done.  Elapsed: %.1f s\n', elapsed);
 
 %% ── Post-processing ──────────────────────────────────────────────────────
 pos_x   = outsim.X(IDX.x,   :);
