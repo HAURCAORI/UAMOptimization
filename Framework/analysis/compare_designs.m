@@ -32,10 +32,14 @@ end
 eval_opts.mode    = options.eval_mode;
 eval_opts.verbose = false;
 eval_opts.loe_for_sim = options.sim_loe;
+if isfield(options, 'objectives')
+    eval_opts.objectives = options.objectives;
+end
 if isfield(options,'sim_config')
     eval_opts.sim_config = options.sim_config;
 end
 eval_opts.sim_config.loe_vec = options.sim_loe;
+eval_opts.sim_config = normalize_sim_config(eval_opts.sim_config);
 
 % ── Evaluate all designs ──────────────────────────────────────────────────
 fprintf('\n=== Evaluating %d designs ===\n', N);
@@ -107,6 +111,10 @@ fprintf('%s\n', repmat('-',1,90));
 if ismember(options.eval_mode, {'sim','full'})
     sim_rows = {'alt_rmse','att_rmse_phi','att_rmse_theta','max_att_excurs','recovery_time','ctrl_effort','diverged'};
     sim_lbl  = {'alt RMSE [m]','phi RMSE [deg]','theta RMSE [deg]','max att [deg]','t_recovery [s]','ctrl effort','diverged'};
+    if ~isempty(results) && ~isempty(results{1}.sim) && isfield(results{1}.sim, 'path_rmse')
+        sim_rows = [{'path_rmse'}, sim_rows];
+        sim_lbl  = [{'path RMSE [m]'}, sim_lbl];
+    end
     for pi = 1:numel(sim_rows)
         fprintf('%-20s', sprintf('  %s', sim_lbl{pi}));
         for k = 1:N
@@ -129,7 +137,7 @@ if ismember(options.eval_mode, {'sim','full'})
 end
 
 % Objectives
-obj_rows = {'J_fault','J_isotropy','J_mission','J_mass','J_combined'};
+obj_rows = {'J_fault','J_isotropy','J_mission','J_cost','J_combined'};
 for pi = 1:numel(obj_rows)
     fprintf('%-20s', sprintf('  %s', obj_rows{pi}));
     for k = 1:N
@@ -142,6 +150,17 @@ for pi = 1:numel(obj_rows)
     end
     fprintf('\n');
 end
+fprintf('%s\n', repmat('=',1,90));
+fprintf('%-20s', '  Active objectives');
+for k = 1:N
+    if isempty(results{k}.objective_names)
+        txt = 'N/A';
+    else
+        txt = strjoin(results{k}.objective_names, ',');
+    end
+    fprintf('  %-14s', txt);
+end
+fprintf('\n');
 fprintf('%s\n', repmat('=',1,90));
 
 % ── Radar chart ───────────────────────────────────────────────────────────

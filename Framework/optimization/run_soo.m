@@ -3,7 +3,7 @@ function [d_opt, J_opt, history] = run_soo(d_init, options)
 %
 %   PROBLEM
 %   -------
-%   Minimize:   J(d) = w1*J_FII + w2*J_hover + w3*J_mission + w4*J_cost
+%   Minimize:   J(d) = weighted combination of configurable objective terms
 %   Subject to: Physical feasibility constraints (see constraint_fcn.m)
 %               Box bounds on selected design variables
 %
@@ -31,8 +31,7 @@ function [d_opt, J_opt, history] = run_soo(d_init, options)
 %       .lb          : [Nvar×1] lower bounds
 %       .ub          : [Nvar×1] upper bounds
 %       .eval_mode   : 'acs'|'sim'|'full'  passed to eval_design (default:'acs')
-%       .weights     : [w_FII, w_hover, w_mission, w_cost]
-%                      default: [0.35, 0.40, 0.00, 0.25]
+%       .objectives  : struct with .names and .weights for eval_design
 %       .max_iter    : max generations (GA) or iterations  (default: 80)
 %       .pop_size    : GA population size                  (default: 50)
 %       .plot_live   : show live convergence figure        (default: true)
@@ -60,7 +59,10 @@ end
 if ~isfield(options,'method'),    options.method    = 'ga';              end
 if ~isfield(options,'var_names'), options.var_names = {'Lx','Lyi','Lyo','T_max'}; end
 if ~isfield(options,'eval_mode'), options.eval_mode = 'acs';             end
-if ~isfield(options,'weights'),   options.weights   = [0.35,0.40,0.00,0.25]; end
+if ~isfield(options,'objectives')
+    options.objectives.names = {'FII','hover','cost'};
+    options.objectives.weights = [0.35,0.40,0.25];
+end
 if ~isfield(options,'max_iter'),  options.max_iter  = 80;                end
 if ~isfield(options,'pop_size'),  options.pop_size  = 50;                end
 if ~isfield(options,'plot_live'), options.plot_live = true;              end
@@ -99,7 +101,7 @@ end
 
 % ── Evaluation options ────────────────────────────────────────────────────
 eval_opts.mode    = options.eval_mode;
-eval_opts.weights = options.weights;
+eval_opts.objectives = options.objectives;
 eval_opts.verbose = false;
 if isfield(options,'model')
     eval_opts.model = options.model;
@@ -114,7 +116,6 @@ history.J_all   = [];
 history.x_best  = x0;
 history.n_evals = 0;
 best_J = inf;
-best_x = x0;
 gen_count = 0;
 
 % ── Live figure setup ─────────────────────────────────────────────────────
@@ -156,7 +157,6 @@ function J_out = tracked_obj(x)
 
     if J_out < best_J
         best_J          = J_out;
-        best_x          = x;
         history.J_best(end+1) = best_J;
         history.x_best  = x;
 
@@ -180,11 +180,11 @@ function J_out = tracked_obj(x)
 
             % Key metrics
             axes(hax_metrics); cla;
-            if ~isempty(r.acs)
-                metric_vals = [r.acs.FII, max(0,-r.acs.hover_margin), r.J_cost];
-                metric_lbls = {'FII','Hover deficit','J\_cost'};
+            if ~isempty(r.objective_vector)
+                metric_vals = r.objective_vector;
+                metric_lbls = r.objective_names;
                 bar(metric_vals, 0.5, 'FaceColor',[0.9 0.4 0.2]);
-                set(gca,'XTick',1:3,'XTickLabel',metric_lbls);
+                set(gca,'XTick',1:numel(metric_vals),'XTickLabel',metric_lbls);
                 title(sprintf('Metrics  [J=%.4f]', best_J)); grid on;
             end
             drawnow limitrate;
@@ -208,7 +208,11 @@ if options.verbose
     fprintf('  Single-Objective Optimization  |  Method: %s\n', upper(options.method));
     fprintf('  Variables : '); fprintf('%s ', var_names{:}); fprintf('\n');
     fprintf('  Eval mode : %s\n', options.eval_mode);
-    fprintf('  Weights   : FII=%.2f  hover=%.2f  mission=%.2f  cost=%.2f\n', options.weights);
+    fprintf('  Objectives: ');
+    for i_obj = 1:numel(options.objectives.names)
+        fprintf('%s(%.2f) ', options.objectives.names{i_obj}, options.objectives.weights(i_obj));
+    end
+    fprintf('\n');
     fprintf('  Pop/Iter  : %d  |  Max gen: %d\n', options.pop_size, options.max_iter);
     fprintf('%s\n', repmat('=',1,65));
     t_start = tic;
@@ -314,8 +318,12 @@ function options = cfg_to_soo_options(cfg)
     options.lb        = cfg.vars.lb(active);
     options.ub        = cfg.vars.ub(active);
     options.eval_mode = cfg.eval.mode;
-    options.weights   = [cfg.weights.FII, cfg.weights.hover, ...
-                         cfg.weights.mission, cfg.weights.cost];
+    if isfield(cfg, 'objectives') && isfield(cfg.objectives, 'stage1')
+        options.objectives = cfg.objectives.stage1;
+    else
+        options.objectives.names = {'FII', 'hover', 'cost'};
+        options.objectives.weights = [0.35, 0.40, 0.25];
+    end
     options.max_iter  = cfg.opt.max_iter;
     options.pop_size  = cfg.opt.ga_pop;
     options.plot_live = cfg.opt.plot_live;
@@ -368,12 +376,18 @@ function cfg = build_cfg_from_options(d_init, options)
     cfg.opt.max_evals = cfg.opt.max_iter * max(cfg.opt.ga_pop, 10);
 
     % Override weights
-    if isfield(options, 'weights') && numel(options.weights) == 4
-        w = options.weights;
-        cfg.weights.FII     = w(1);
-        cfg.weights.hover   = w(2);
-        cfg.weights.mission = w(3);
-        cfg.weights.cost    = w(4);
+    if isfield(options, 'objectives')
+        cfg.objectives.stage1 = options.objectives;
+        cfg.weights.FII = 0;
+        cfg.weights.hover = 0;
+        cfg.weights.mission = 0;
+        cfg.weights.cost = 0;
+        for k = 1:numel(options.objectives.names)
+            name_k = options.objectives.names{k};
+            if isfield(cfg.weights, name_k)
+                cfg.weights.(name_k) = options.objectives.weights(k);
+            end
+        end
     end
 
     % Override eval mode

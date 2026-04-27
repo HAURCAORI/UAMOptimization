@@ -13,9 +13,6 @@ end
 if ~isfield(options, 'sim_config')
     options.sim_config = struct();
 end
-if ~isfield(options, 'weights')
-    options.weights = [0.35, 0.40, 0.10, 0.15];
-end
 if ~isfield(options, 'loe_for_sim')
     options.loe_for_sim = [1;0;0;0;0;0];
 end
@@ -25,15 +22,14 @@ end
 if ~isfield(options, 'model')
     options.model = struct();
 end
-
-if isstruct(options.weights)
-    ws = options.weights;
-    options.weights = [ws.FII, ws.hover, ws.mission, ws.cost];
+if ~isfield(options, 'objectives')
+    options.objectives = default_objective_config(options);
 end
 
 if ~isfield(options.sim_config, 'loe_vec')
     options.sim_config.loe_vec = options.loe_for_sim;
 end
+options.sim_config = normalize_sim_config(options.sim_config);
 
 d_eval = d;
 if isfield(options.model, 'use_vehicle_model')
@@ -81,14 +77,21 @@ else
     J_cost = J_struct * J_motor;
 end
 
-w = options.weights;
-terms = [J_FII, J_hover, J_mission, J_cost];
-mask = ~isnan(terms);
-if any(mask)
-    J_combined = (w(mask) / sum(w(mask))) * terms(mask)';
-else
-    J_combined = NaN;
+objective_values = struct( ...
+    'FII', J_FII, ...
+    'hover', J_hover, ...
+    'mission', J_mission, ...
+    'cost', J_cost, ...
+    'struct', J_struct, ...
+    'motor', J_motor);
+if ~isempty(acs)
+    objective_values.WCFR = acs.WCFR;
+    objective_values.PFWAR = acs.PFWAR;
+    objective_values.hover_margin_deficit = max(0, -acs.hover_margin);
 end
+
+[J_combined, objective_vector, objective_names, objective_weights] = ...
+    combine_objectives(objective_values, options.objectives);
 
 result.feasible = feasible;
 result.J_combined = J_combined;
@@ -106,6 +109,10 @@ result.sim = sim;
 result.d = d_eval;
 result.m_total = UAM.m;
 result.cT_effective = Prop.cT;
+result.objectives = objective_values;
+result.objective_vector = objective_vector;
+result.objective_names = objective_names;
+result.objective_weights = objective_weights;
 
 if options.verbose
     fprintf('\n=== Design Evaluation Summary ===\n');
@@ -122,10 +129,77 @@ if options.verbose
     end
     if ~isempty(sim)
         fprintf('  alt_RMSE      = %.2f m  (J_mission=%.3f)\n', sim.alt_rmse, J_mission);
+        if isfield(sim, 'path_rmse')
+            fprintf('  path_RMSE     = %.2f m\n', sim.path_rmse);
+        end
         fprintf('  max att       = %.1f deg  diverged=%d\n', sim.max_att_excurs, sim.diverged);
     end
     fprintf('  J_cost        = %.4f  (struct=%.3f  motor=%.3f)\n', J_cost, J_struct, J_motor);
     fprintf('  J_combined    = %.4f\n', J_combined);
+    if ~isempty(objective_names)
+        fprintf('  Objectives    = ');
+        for k = 1:numel(objective_names)
+            fprintf('%s=%.4f ', objective_names{k}, objective_vector(k));
+        end
+        fprintf('\n');
+    end
     fprintf('  Feasible      = %d\n', feasible);
 end
+end
+
+function objective_cfg = default_objective_config(options)
+if isfield(options, 'weights')
+    objective_cfg.names = {'FII', 'hover', 'mission', 'cost'};
+    if isstruct(options.weights)
+        ws = options.weights;
+        objective_cfg.weights = [ws.FII, ws.hover, ws.mission, ws.cost];
+    else
+        objective_cfg.weights = options.weights(:)';
+    end
+else
+    objective_cfg.names = {'FII', 'hover', 'cost'};
+    objective_cfg.weights = [0.35, 0.40, 0.25];
+end
+end
+
+function [J_combined, objective_vector, objective_names, objective_weights] = ...
+    combine_objectives(objective_values, objective_cfg)
+objective_names = {};
+objective_weights = [];
+objective_vector = [];
+J_combined = NaN;
+
+if isempty(objective_cfg) || ~isfield(objective_cfg, 'names') || isempty(objective_cfg.names)
+    return;
+end
+
+objective_names = objective_cfg.names(:)';
+objective_weights = objective_cfg.weights(:)';
+if numel(objective_names) ~= numel(objective_weights)
+    error('eval_design: objective names/weights size mismatch.');
+end
+
+keep = false(size(objective_names));
+vals = nan(size(objective_names));
+for k = 1:numel(objective_names)
+    name = objective_names{k};
+    if isfield(objective_values, name)
+        vals(k) = objective_values.(name);
+        keep(k) = isfinite(vals(k));
+    end
+end
+
+objective_names = objective_names(keep);
+objective_weights = objective_weights(keep);
+objective_vector = vals(keep);
+if isempty(objective_vector)
+    return;
+end
+
+w_sum = sum(objective_weights);
+if w_sum <= 0
+    error('eval_design: objective weights must sum to a positive value.');
+end
+
+J_combined = (objective_weights / w_sum) * objective_vector';
 end

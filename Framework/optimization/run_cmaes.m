@@ -93,8 +93,13 @@ last_best_eval = 0;
 
 %% ── Evaluation options ────────────────────────────────────────────────────
 eval_opts.mode    = cfg.eval.mode;
-eval_opts.weights = weights_struct_to_vec(cfg.weights);
 eval_opts.verbose = false;
+if isfield(cfg, 'objectives') && isfield(cfg.objectives, 'stage1')
+    eval_opts.objectives = cfg.objectives.stage1;
+else
+    eval_opts.objectives.names = {'FII', 'hover', 'cost'};
+    eval_opts.objectives.weights = [0.35, 0.40, 0.25];
+end
 if isfield(cfg, 'model')
     eval_opts.model = cfg.model;
     if isfield(cfg.model, 'use_vehicle_model')
@@ -110,7 +115,11 @@ eval_opts.fault_config   = fault_cfg;
 % Sim config (only used in 'sim'/'full' mode)
 sim_cfg.loe_vec    = cfg.sim.loe_vec;
 sim_cfg.T_end      = cfg.sim.T_end;
-sim_cfg.fault_time = cfg.sim.fault_time;
+if isfield(cfg.sim, 't_fault')
+    sim_cfg.t_fault = cfg.sim.t_fault;
+else
+    sim_cfg.t_fault = cfg.sim.fault_time;
+end
 sim_cfg.dt         = cfg.sim.dt;
 sim_cfg.alt_cmd    = cfg.sim.alt_cmd;
 eval_opts.sim_config = sim_cfg;
@@ -346,9 +355,9 @@ function update_live_plot()
     for ki = 1:n, d_tmp.(names{ki}) = x_phys(ki); end
     r = eval_design(d_tmp, eval_opts);
     if ~isempty(r.acs)
-        vals = [r.acs.FII, max(0, -r.acs.hover_margin), r.J_cost];
+        vals = r.objective_vector;
         bar(vals, 0.5, 'FaceColor',[0.9 0.4 0.2]);
-        set(gca, 'XTick',1:3, 'XTickLabel',{'FII','Hover deficit','J\_cost'});
+        set(gca, 'XTick',1:numel(vals), 'XTickLabel',r.objective_names);
         title(sprintf('Metrics  [J=%.4f]', best_J)); grid on;
     end
     drawnow limitrate;
@@ -365,9 +374,4 @@ function arx = reflect_bounds_matrix(arx_raw, lo, hi)
     arx   = lo + mod(arx_raw - lo, 2 * range);
     mask  = arx > hi;
     arx(mask) = 2*hi - arx(mask);
-end
-
-function w_vec = weights_struct_to_vec(w_struct)
-% Convert weights struct to [FII, hover, mission, cost] vector.
-    w_vec = [w_struct.FII, w_struct.hover, w_struct.mission, w_struct.cost];
 end

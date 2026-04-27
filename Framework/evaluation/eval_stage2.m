@@ -14,42 +14,46 @@ if isfield(cfg_or_sim, 'vars')
     sim_config.t_end   = cfg_or_sim.sim.T_end;
     sim_config.dt      = cfg_or_sim.sim.dt;
     sim_config.alt_cmd = cfg_or_sim.sim.alt_cmd;
+    if isfield(cfg_or_sim.sim, 'scenario')
+        sim_config.scenario = cfg_or_sim.sim.scenario;
+    end
+    if isfield(cfg_or_sim.sim, 'mission')
+        sim_config.mission = cfg_or_sim.sim.mission;
+    end
+    if isfield(cfg_or_sim.sim, 'use_scaled_gains')
+        sim_config.use_scaled_gains = cfg_or_sim.sim.use_scaled_gains;
+    end
     if isfield(cfg_or_sim.sim, 'fault_time')
         sim_config.t_fault = cfg_or_sim.sim.fault_time;
     elseif isfield(cfg_or_sim.sim, 't_fault')
         sim_config.t_fault = cfg_or_sim.sim.t_fault;
-    else
-        sim_config.t_fault = 5;
     end
+    % If neither field present, normalize_sim_config provides the default (10s)
 else
     sim_config = cfg_or_sim;
-    if ~isfield(sim_config, 'loe_vec')
-        sim_config.loe_vec = [1;0;0;0;0;0];
-    end
-    if ~isfield(sim_config, 't_end')
-        sim_config.t_end = 30;
-    end
-    if ~isfield(sim_config, 'dt')
-        sim_config.dt = 0.01;
-    end
-    if ~isfield(sim_config, 'alt_cmd')
-        sim_config.alt_cmd = 10;
-    end
-    if ~isfield(sim_config, 't_fault')
-        if isfield(sim_config, 'fault_time')
-            sim_config.t_fault = sim_config.fault_time;
-        else
-            sim_config.t_fault = 5;
-        end
-    end
 end
 
-sim = eval_simulation(d, sim_config);
+sim_config = normalize_sim_config(sim_config);
+if ~isfield(sim_config, 'scenario')
+    sim_config.scenario = 'hover';
+end
 
-alt_cmd = sim_config.alt_cmd;
+switch lower(sim_config.scenario)
+    case 'figure8'
+        sim = eval_mission_figure8(d, sim_config);
+        % Normalize by alt_cmd so diverged (total_rmse=200, alt_cmd=10) → J=20,
+        % matching the hover-mode penalty scale exactly.
+        tol = max(sim_config.alt_cmd, 1);
+        J_mission = min(sim.total_rmse / tol, 20.0);
+    otherwise
+        sim = eval_simulation(d, sim_config);
+        alt_cmd = sim_config.alt_cmd;
+        J_mission = min(sim.alt_rmse / alt_cmd, 20.0);
+end
+
 result.feasible       = ~sim.diverged;
 result.sim            = sim;
-result.J_mission      = min(sim.alt_rmse / alt_cmd, 20.0);
+result.J_mission      = J_mission;
 result.alt_rmse       = sim.alt_rmse;
 result.max_att_excurs = sim.max_att_excurs;
 result.recovery_time  = sim.recovery_time;

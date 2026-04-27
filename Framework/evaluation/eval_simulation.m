@@ -44,11 +44,7 @@ function metrics = eval_simulation(d, sim_config)
 
 % ── Defaults ──────────────────────────────────────────────────────────────
 if nargin < 2, sim_config = struct(); end
-if ~isfield(sim_config,'loe_vec'),  sim_config.loe_vec  = [1;0;0;0;0;0]; end
-if ~isfield(sim_config,'t_fault'),  sim_config.t_fault  = 10; end
-if ~isfield(sim_config,'t_end'),    sim_config.t_end    = 40; end
-if ~isfield(sim_config,'dt'),       sim_config.dt       = 0.01; end
-if ~isfield(sim_config,'alt_cmd'),  sim_config.alt_cmd  = 10; end
+sim_config = normalize_sim_config(sim_config);
 
 % ── Physical model ────────────────────────────────────────────────────────
 [UAM, Prop, Env] = hexacopter_params(d);
@@ -68,12 +64,27 @@ num_step = round(t_end / dt);
 t_vec    = (1:num_step) * dt;
 
 % ── Controller gains (cascade PI, tuned for UAM mass scale) ───────────────
-Kp_p = 60000;   Kp_q = 50000;   Kp_r = 20000;
-Ki_p = 30000;   Ki_q = 20000;   Ki_r = 1000;
+gains_ref.Kp_p  = 60000;  gains_ref.Kp_q  = 50000;  gains_ref.Kp_r  = 20000;
+gains_ref.Ki_p  = 30000;  gains_ref.Ki_q  = 20000;  gains_ref.Ki_r  = 1000;
+gains_ref.Kp_vz = 2000;   gains_ref.Ki_vz = 600;
 tau_phi = 1.0;  tau_theta = 1.0; tau_psi = 5.0;
 r_max = 0.1;
+tau_z = 5.0;  Vz_max = 3.0;
 
-Kp_vz = 2000;  Ki_vz = 600;  tau_z = 5.0;  Vz_max = 3.0;
+if sim_config.use_scaled_gains
+    d_ref = design_default();
+    if isfield(d, 'use_vehicle_model')
+        d_ref.use_vehicle_model = d.use_vehicle_model;
+    end
+    [UAM_ref, ~, ~] = hexacopter_params(d_ref);
+    gains = tune_sim_gains(UAM, gains_ref, UAM_ref);
+else
+    gains = gains_ref;
+end
+
+Kp_p = gains.Kp_p;   Kp_q = gains.Kp_q;   Kp_r = gains.Kp_r;
+Ki_p = gains.Ki_p;   Ki_q = gains.Ki_q;   Ki_r = gains.Ki_r;
+Kp_vz = gains.Kp_vz; Ki_vz = gains.Ki_vz;
 
 % Integral states
 i_p = 0;  i_q = 0;  i_r = 0;  i_vz = 0;
@@ -253,4 +264,6 @@ metrics.t_vec          = t_vec;
 metrics.X_hist         = X_hist;
 metrics.T_hist         = T_hist;
 metrics.t_fault        = t_fault;
+metrics.sim_config     = sim_config;
+metrics.gains          = gains;
 end

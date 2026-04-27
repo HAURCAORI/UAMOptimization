@@ -12,80 +12,97 @@ Current agreement:
 - Use `Src/sim_path_following.m` as the mission reference for now.
 - Treat the project as MDO-focused, not control-only.
 - Build the optimization in stages:
-  1. Dynamics/safety feasibility optimization
-  2. Mission-based optimization on feasible designs
+  1. Stage 1 design optimization
+  2. Stage 2 controller tuning / mission validation
   3. Fault-model expansion
+- Controller optimization is needed, but it is not the primary optimization
+  problem. It should be used as validation / secondary tuning after Stage 1.
 
 ## Priority 0: Architecture Cleanup
 
-- [ ] Define the framework around extensible parameter sets instead of a fixed
+- [x] Define the framework around extensible parameter sets instead of a fixed
       four-variable assumption.
-- [ ] Keep `main_mdo.m` allowed to stay hard-coded for orchestration only.
-- [ ] Remove hard-coded assumptions from core/evaluation/optimization
+- [x] Keep `main_mdo.m` allowed to stay hard-coded for orchestration only.
+- [x] Remove hard-coded assumptions from core/evaluation/optimization
       functions where possible.
-- [ ] Standardize config naming and flow across all modules.
+- [x] Standardize config naming and flow across all modules.
 - [ ] Fix text encoding corruption in comments, manual files, and printed
       console output.
 
 ## Priority 1: Parameterized Design Model
 
-- [ ] Keep current implemented parameters as the baseline active set:
+- [x] Keep current implemented parameters as the baseline active set:
       `Lx`, `Lyi`, `Lyo`, `T_max`.
-- [ ] Refactor the design/config pipeline so new parameters can be added
+- [x] Refactor the design/config pipeline so new parameters can be added
       without rewriting evaluator logic.
 - [ ] Separate:
       geometry parameters,
       propulsion parameters,
       structural/inertial surrogate parameters,
       safety/mission settings.
-- [ ] Upgrade the current mass/inertia/cost surrogate into a clearer
+- [x] Upgrade the current mass/inertia/cost surrogate into a clearer
       parameterized design model.
 - [ ] Document which outputs are derived from design variables and which stay
       fixed assumptions.
 
-## Priority 2: Two-Stage Optimization Workflow
+## Priority 2: Rough Optimization Implementation
 
-### Stage 1: Feasibility / Dynamics / Safety
+### Stage 1: Primary Design Optimization
 
-- [ ] Formalize a Stage 1 evaluator that screens infeasible designs before
-      mission optimization.
-- [ ] Include ACS-based survivability and dynamic feasibility checks.
-- [ ] Define Stage 1 outputs so they can be reused directly by Stage 2.
-- [ ] Make Stage 1 objective and constraints configurable from
+- [x] Keep Stage 1 as the primary optimization problem.
+- [x] Use current active variables as the rough first implementation:
+      `Lx`, `Lyi`, `Lyo`, `T_max`.
+- [x] Keep the code extensible so new design variables can be added later.
+- [x] Use ACS / hover / cost objectives for the rough optimization pass.
+- [x] Keep Stage 1 fast and stable enough for repeated SOO / MOO runs.
+- [x] Make Stage 1 objective and constraints configurable from
       `config/mdo_config.m`.
 
 Candidate Stage 1 checks:
 
-- [ ] Single-fault hover feasibility
+- [x] Single-fault hover feasibility
 - [ ] Hover allocation feasibility
 - [ ] Worst-case utilization / saturation margin
-- [ ] Dynamic non-divergence after fault
-- [ ] Attitude excursion / recovery screening
+- [x] ACS retention / survivability metrics
+- [x] Cost / mass surrogate consistency
 
-### Stage 2: Mission-Based Optimization
+Current rough Stage 1 objective direction:
 
-- [ ] Build a mission evaluator inside `Framework/evaluation` using
+- [x] `FII`
+- [x] `J_hover`
+- [x] `J_cost`
+
+### Stage 2: Secondary Controller Tuning / Mission Validation
+
+- [x] Do not treat controller gains as the primary design variables.
+- [x] Use Stage 2 mainly to validate selected Stage 1 candidate designs.
+- [x] Allow controller gain adjustment as a secondary tuning problem only.
+- [x] Keep Stage 2 separate from the main Stage 1 design optimization loop.
+- [x] Build a mission evaluator inside `Framework/evaluation` using
       `Src/sim_path_following.m` as the starting reference.
-- [ ] Run mission optimization only on designs that pass Stage 1.
-- [ ] Support combined objectives across fault tolerance, mission tracking,
-      and practical design penalties.
-- [ ] Keep the implementation general so additional mission scenarios can be
-      added later.
+- [x] Use mission/path-following results to compare promising Stage 1
+      candidates, not to replace Stage 1.
 
 ## Priority 3: Mission Integration
 
-- [ ] Port figure-8 tracking logic from `Src/sim_path_following.m` into the
+- [x] Port figure-8 tracking logic from `Src/sim_path_following.m` into the
       framework as a reusable function.
-- [ ] Avoid leaving mission simulation as a standalone legacy script.
-- [ ] Define mission metrics suitable for optimization, not only plotting.
+- [x] Avoid leaving mission simulation as a standalone legacy script.
+- [x] Define mission metrics suitable for optimization, not only plotting.
 
 Candidate mission metrics:
 
-- [ ] Path tracking RMSE
-- [ ] Altitude tracking RMSE
-- [ ] Attitude excursion during mission
-- [ ] Recovery after fault injection during mission
-- [ ] Control effort / thrust usage
+- [x] Path tracking RMSE
+- [x] Altitude tracking RMSE
+- [x] Attitude excursion during mission
+- [x] Recovery after fault injection during mission
+- [x] Control effort / thrust usage
+
+Stage 2 role:
+
+- [ ] validation of Stage 1 candidate designs
+- [ ] secondary controller tuning if needed
+- [ ] practical mission-capability check
 
 ## Priority 4: Control Allocation Upgrade
 
@@ -104,7 +121,7 @@ Verification items:
 
 ### Phase 1
 
-- [ ] Full single-motor failure
+- [x] Full single-motor failure
 
 ### Phase 2
 
@@ -118,12 +135,15 @@ Verification items:
 
 ## Priority 6: Verification and Metric Review
 
-- [ ] Verify the current recovery-time definition.
-- [ ] Check whether recovery means "first re-entry" or "re-entry and stay
+- [x] Verify the current recovery-time definition.
+- [x] Check whether recovery means "first re-entry" or "re-entry and stay
       recovered".
+- [x] Verify that analytic gain scaling is used consistently in simulation.
+- [x] Check whether optimized Stage 1 designs remain stable under scaled
+      gains.
 - [ ] Reassess the current novelty claims and keep only what can be defended.
-- [ ] Verify that simulation settings from config are actually respected.
-- [ ] Fix the known `fault_time` vs `t_fault` config mismatch.
+- [x] Verify that simulation settings from config are actually respected.
+- [x] Fix the known `fault_time` vs `t_fault` config mismatch.
 
 ## Priority 7: Practical / Report-Quality Improvements
 
@@ -134,14 +154,13 @@ Verification items:
 
 ## Immediate Next Implementation Steps
 
-- [ ] Create a clean staged evaluation architecture:
-      feasibility evaluator,
-      mission evaluator,
-      combined design evaluator.
-- [ ] Refactor config handling so the same config structure drives all stages.
+- [x] Finalize rough Stage 1 optimization with the current active variables.
+- [x] Keep Stage 1 objectives limited to ACS / hover / cost terms.
+- [ ] Share Stage 1 results with teammates to decide final design variables.
+- [ ] After that decision, extend the design-variable set if needed.
 - [ ] Integrate path-following mission simulation into `Framework`.
-- [ ] Upgrade control allocation logic.
-- [ ] Rework objective/constraint definitions for Stage 1 and Stage 2.
+- [ ] Use Stage 2 to validate or tune selected Stage 1 candidates.
+- [ ] Upgrade control allocation logic after rough Stage 1 is stabilized.
 
 ## Notes
 

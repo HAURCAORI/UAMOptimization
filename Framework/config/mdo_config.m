@@ -22,7 +22,17 @@ function cfg = mdo_config()
 %   Set cfg.vars.active(k) = false — it stays at its x0 value.
 
 %% ── OBJECTIVE WEIGHTS ─────────────────────────────────────────────────────
-% Components of the combined objective J = sum(w_i * J_i) / sum(w_i)
+% Stage 1 default objective set for the rough design optimization pass.
+% These names/weights are intended to be easy to change later.
+cfg.objectives.stage1.names     = {'FII', 'hover', 'cost'};
+cfg.objectives.stage1.weights   = [0.35, 0.40, 0.25];
+cfg.objectives.stage1.moo_names = {'FII', 'hover', 'cost'};
+%
+% Stage 2 objective registry is reserved for later mission/control work.
+cfg.objectives.stage2.names     = {'mission'};
+cfg.objectives.stage2.weights   = 1.0;
+%
+% Legacy weight struct kept for compatibility with older scripts.
 cfg.weights.FII     = 0.35;   % Fault Isotropy Index: std(r_i)/mean(r_i)
 cfg.weights.hover   = 0.40;   % Hover safety penalty (0 when T_max ≥ 3× threshold)
 cfg.weights.mission = 0.00;   % Mission tracking RMSE (needs eval.mode='sim'/'full')
@@ -64,7 +74,7 @@ cfg.opt.ga_pop     = 50;        % GA population size
 cfg.opt.tol_fun    = 1e-6;      % convergence tolerance on objective value
 cfg.opt.use_polish = true;      % run fmincon SQP polish after global search
 cfg.opt.verbose    = true;      % print per-generation progress
-cfg.opt.plot_live  = true;      % show live convergence figure
+cfg.opt.plot_live  = false;      % show live convergence figure
 
 %% ── VEHICLE MODEL ─────────────────────────────────────────────────────────
 % Physics-based parameterized vehicle model (Delbecq 2020 scaling laws).
@@ -104,5 +114,12 @@ cfg.sim.T_end      = 30;            % simulation duration [s]
 cfg.sim.fault_time = 5;             % time of fault injection [s]
 cfg.sim.dt         = 0.01;          % timestep [s] (use 0.005 for accuracy)
 cfg.sim.alt_cmd    = 10;            % commanded altitude [m]
+cfg.sim.scenario   = 'hover';       % 'hover' | 'figure8'
+cfg.sim.mission.A        = 100;     % figure-8 amplitude [m]
+cfg.sim.mission.T_period = 120;     % figure-8 period [s]
+cfg.sim.mission.z_cruise = 50;      % mission altitude [m]
+cfg.sim.mission.t_start  = 20;      % climb duration before mission [s]
+cfg.sim.mission.n_laps   = 1;       % number of figure-8 laps
+cfg.sim.mission.ramp_time = 0;      % reference blend-in time [s], 0 matches Src script
 
 end

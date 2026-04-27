@@ -137,8 +137,8 @@ if isempty(r.sim)
 end
 s   = r.sim;
 t   = s.t_vec;
-IDX_phi=7; IDX_theta=8; IDX_psi=9;
-IDX_z=12; IDX_vz=15;
+IDX_phi=7; IDX_theta=8;
+IDX_z=12;
 
 alt_h   = -s.X_hist(IDX_z,:);
 phi_h   = rad2deg(s.X_hist(IDX_phi,:));
@@ -155,7 +155,8 @@ end
 figure('Name','Post-Fault Response');
 subplot(3,1,1);
 plot(t, alt_h, 'b', 'LineWidth', 1.5); hold on;
-yline(10, 'r--', 'Cmd', 'LabelHorizontalAlignment','right');
+alt_ref_level = reference_altitude_for_plot(s);
+yline(alt_ref_level, 'r--', 'Cmd', 'LabelHorizontalAlignment','right');
 xline(t_fault, 'k:', 'Fault', 'LabelVerticalAlignment','top');
 grid on; ylabel('Altitude [m]'); title('Post-Fault Simulation Response');
 legend('Actual','Cmd','Fault','Location','best');
@@ -174,6 +175,121 @@ plot(t, thrust_total / max(thrust_total), 'k', 'LineWidth', 1.5);
 xline(t_fault, 'k:');
 grid on; ylabel('Total Thrust / T_{peak}'); xlabel('Time [s]');
 title('Normalized Thrust Effort');
+
+if isfield(s, 'pos_ref')
+    control_sim = mission_control_group(r);
+    plot_mission_tracking(s, control_sim, t, t_fault);
+end
+end
+
+function plot_mission_tracking(s, control_sim, t, t_fault)
+IDX_x = 10; IDX_y = 11; IDX_z = 12;
+
+x_act = s.X_hist(IDX_x, :);
+y_act = s.X_hist(IDX_y, :);
+alt_act = -s.X_hist(IDX_z, :);
+
+x_ref = s.pos_ref(1, :);
+y_ref = s.pos_ref(2, :);
+alt_ref = s.pos_ref(3, :);
+
+has_control = ~isempty(control_sim) && isfield(control_sim, 'X_hist');
+if has_control
+    x_ctrl = control_sim.X_hist(IDX_x, :);
+    y_ctrl = control_sim.X_hist(IDX_y, :);
+    alt_ctrl = -control_sim.X_hist(IDX_z, :);
+    err_xy_ctrl = hypot(x_ctrl - x_ref, y_ctrl - y_ref);
+else
+    x_ctrl = [];
+    y_ctrl = [];
+    alt_ctrl = [];
+    err_xy_ctrl = [];
+end
+
+err_xy_fault = hypot(x_act - x_ref, y_act - y_ref);
+
+figure('Name', 'Mission Tracking');
+
+subplot(2,2,1);
+plot(x_ref, y_ref, 'k--', 'LineWidth', 1.2, 'DisplayName', 'Reference'); hold on;
+if has_control
+    plot(x_ctrl, y_ctrl, 'Color', [0.15 0.65 0.25], 'LineWidth', 1.3, ...
+        'DisplayName', 'No Fault');
+end
+plot(x_act, y_act, 'b-', 'LineWidth', 1.4, 'DisplayName', 'Faulted');
+grid on; axis equal;
+xlabel('X [m]'); ylabel('Y [m]');
+title('XY Mission Path');
+legend('Location', 'best');
+
+subplot(2,2,2);
+plot3(x_ref, y_ref, alt_ref, 'k--', 'LineWidth', 1.0, 'DisplayName', 'Reference'); hold on;
+if has_control
+    plot3(x_ctrl, y_ctrl, alt_ctrl, 'Color', [0.15 0.65 0.25], 'LineWidth', 1.1, ...
+        'DisplayName', 'No Fault');
+end
+plot3(x_act, y_act, alt_act, 'b-', 'LineWidth', 1.2, 'DisplayName', 'Faulted');
+grid on;
+xlabel('X [m]'); ylabel('Y [m]'); zlabel('Altitude [m]');
+title('3D Mission Path');
+view(40, 24);
+legend('Location', 'best');
+
+subplot(2,2,3);
+if has_control
+    plot(t, err_xy_ctrl, 'Color', [0.15 0.65 0.25], 'LineWidth', 1.2, ...
+        'DisplayName', 'No Fault'); hold on;
+else
+    hold on;
+end
+plot(t, err_xy_fault, 'b', 'LineWidth', 1.2, 'DisplayName', 'Faulted');
+xline(t_fault, 'k:');
+grid on;
+xlabel('Time [s]'); ylabel('Horizontal Error [m]');
+title('Horizontal Tracking Error Norm');
+legend('Location', 'best');
+
+subplot(2,2,4);
+plot(t, alt_ref, 'k--', 'LineWidth', 1.0, 'DisplayName', 'Reference'); hold on;
+if has_control
+    plot(t, alt_ctrl, 'Color', [0.15 0.65 0.25], 'LineWidth', 1.2, ...
+        'DisplayName', 'No Fault');
+end
+plot(t, alt_act, 'b', 'LineWidth', 1.2, 'DisplayName', 'Faulted');
+xline(t_fault, 'k:');
+grid on;
+xlabel('Time [s]'); ylabel('Altitude [m]');
+title('Altitude Tracking');
+legend('Location', 'best');
+end
+
+function alt_ref = reference_altitude_for_plot(s)
+if isfield(s, 'pos_ref') && ~isempty(s.pos_ref)
+    alt_ref = s.pos_ref(3, end);
+elseif isfield(s, 'sim_config') && isfield(s.sim_config, 'alt_cmd')
+    alt_ref = s.sim_config.alt_cmd;
+else
+    alt_ref = 10;
+end
+end
+
+function control_sim = mission_control_group(r)
+control_sim = [];
+
+if ~isfield(r, 'd') || ~isfield(r, 'sim') || isempty(r.sim)
+    return;
+end
+if ~isfield(r.sim, 'sim_config') || ~isfield(r.sim, 'pos_ref')
+    return;
+end
+
+sim_config = r.sim.sim_config;
+if ~isfield(sim_config, 'scenario') || ~strcmpi(sim_config.scenario, 'figure8')
+    return;
+end
+
+sim_config.loe_vec = zeros(6, 1);
+control_sim = eval_mission_figure8(r.d, sim_config);
 end
 
 

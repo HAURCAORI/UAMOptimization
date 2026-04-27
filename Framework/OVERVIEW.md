@@ -1,210 +1,157 @@
-# Stage 1 Overview
+# Framework Overview
 
-## Purpose
+## 1. Current Status
 
-Stage 1 is the current **fast screening / optimization layer** for the UAM
-hexacopter project.
+The framework now has two connected layers:
 
-It is intended to answer:
+- Stage 1: design optimization
+- Stage 2: mission validation
 
-- Which designs are structurally and actuator-wise plausible?
-- Which designs can maintain single-fault hover?
-- Which designs distribute fault impact more evenly?
-- What is the cost trade-off for improving fault tolerance?
+Stage 1 is the main working optimization layer.
+Stage 2 is implemented and usable, but it is currently a secondary
+validation layer rather than the primary optimization loop.
 
-It is **not** the final mission-validation layer.
+---
 
-## What Stage 1 Evaluates
+## 2. What Is Implemented
 
-Stage 1 is based on ACS and hover-feasibility analysis.
+### Stage 1
 
-Main metrics:
+- ACS-based fault-tolerance evaluation
+- single-motor-fault hover screening
+- parameterized mass and inertia model
+- cost surrogate tied to the vehicle model
+- SOO workflow
+- MOO workflow
+- Pareto analysis and design comparison
 
-- `FII`
-  Fault Isotropy Index. Lower is better.
-  Measures how unevenly different motor failures damage control authority.
+### Stage 2
 
-- `WCFR`
-  Worst-Case Fault Retention. Higher is better.
-  Minimum ACS volume retention across single-motor failures.
+- hover simulation path
+- figure-8 mission simulation path
+- normalized simulation config handling
+- analytic gain scaling for fairer cross-design evaluation
+- mission verification block in `main_mdo.m`
 
-- `PFWAR`
-  Probabilistic Fault-Weighted ACS Retention.
-  In practice this stays near `1/3` for this configuration, so it is not a
-  strong optimization lever.
+---
 
-- `hover_ok`
-  Number of single-motor fault cases that can still hover.
+## 3. Current Design Variables
 
-- `hover_margin`
-  Margin above the worst single-fault hover threshold.
-  Positive means all single-fault hover cases are feasible.
-
-- `J_cost`
-  Current Stage 1 cost proxy.
-  In the current model this comes from the parameterized vehicle model
-  (motor mass + frame mass), normalized to baseline.
-
-## Current Design Variables
-
-Current active variables:
+Active by default:
 
 - `Lx`
 - `Lyi`
 - `Lyo`
 - `T_max`
 
-Currently present but frozen by default:
+Reserved but frozen by default:
 
 - `d_prop`
 
-The code is now structured so more variables can be added later without
-rewriting the whole framework.
+The code is structured so more variables can be added later without
+rewriting the evaluation or optimization flow.
 
-## Current Modeling Assumption
+---
 
-The current default path uses a **parameterized vehicle model**:
+## 4. Current Objectives
 
-- total mass is not fixed
-- motor mass scales with `T_max`
-- frame mass scales with arm span
-- inertia is recomputed from the design
+### Stage 1 objectives
 
-This is the current Stage 1 novelty direction: a compact parameterized
-design model embedded inside optimization.
-
-## How To Run Stage 1
-
-### Baseline evaluation
-
-```matlab
-addpath('config','core','evaluation','metrics','optimization','analysis');
-d = design_default();
-r = eval_design(d, struct('mode','acs','verbose',true));
-```
-
-### Single-objective optimization
-
-```matlab
-cfg = mdo_config();
-cfg.eval.mode = 'acs';
-[d_opt, J_opt, hist] = run_soo(design_default(), cfg);
-```
-
-### Multi-objective optimization
-
-```matlab
-d0 = design_default();
-moo_opts.var_names = {'Lx','Lyi','Lyo','T_max'};
-moo_opts.lb = [1.0, 1.0, 2.5, 8000];
-moo_opts.ub = [5.0, 5.0, 9.0, 16000];
-moo_opts.eval_mode = 'acs';
-moo_opts.pop_size = 100;
-moo_opts.max_gen = 150;
-[pareto_designs, pareto_J] = run_moo(d0, moo_opts);
-```
-
-## How To Read Current Results
-
-Reasonable Stage 1 trends:
-
-- `FII` decreases as geometry becomes more balanced for fault tolerance
-- `hover_ok` improves as `T_max` increases past the threshold
-- Pareto knee should usually have:
-  larger geometry than the SOO optimum,
-  higher cost/mass than SOO,
-  slightly better `FII`
-
-Important interpretation rule:
-
-- `acs`-only `J_combined` values are the valid Stage 1 optimization scores
-- `full`-mode `J_combined` values are not Stage 1 scores, because they also
-  include the mission penalty
-
-So if Section 5 and the final summary show different `J_combined` scales,
-that is expected.
-
-## Current Status
-
-What is working:
-
-- Stage 1 optimization behavior is plausible
-- ACS metrics are consistent
-- single-fault hover screening is now enforced in Stage 1 feasibility
-- parameterized mass/inertia/cost model is wired into evaluation
-
-What is not ready:
-
-- mission/path-following validation
-- dynamic proof that Stage 1 candidates can actually recover in closed-loop
-- degraded-fault and multifault optimization
-
-## Known Issues / Limitations
-
-These should be shared clearly with teammates.
-
-### 1. Stage 1 is not mission feasibility
-
-A Stage 1 design can be:
-
-- ACS-feasible
-- hover-feasible under single fault
-
-and still fail the current simulation.
-
-So Stage 1 should be described as:
-
-- `fault-tolerant hover/ACS screening`
-
-not:
-
-- `full dynamic feasibility`
-
-### 2. Current simulation still diverges for tested designs
-
-At the moment, Stage 2 / `full` validation is still failing for baseline,
-SOO-optimal, and Pareto-knee designs in the tested motor-3 fault case.
-
-That means:
-
-- Stage 1 is useful for screening
-- Stage 2 still needs controller / mission-layer work
-
-### 3. PFWAR is not a useful main design lever here
-
-It remains close to `0.3333` for this configuration.
-
-For discussion and reporting, focus more on:
+Current default:
 
 - `FII`
-- `hover_margin`
-- `hover_ok`
-- `J_cost`
+- `hover`
+- `cost`
 
-### 4. Current cost model is still a compact surrogate
+Configured through:
 
-It is better than the old fixed-mass proxy, but it is still not a full
-structural or propulsion design model.
+```matlab
+cfg.objectives.stage1.names
+cfg.objectives.stage1.weights
+cfg.objectives.stage1.moo_names
+```
 
-It should be presented as a parameterized surrogate model.
+### Stage 2 objective
 
-## Recommended Team Message
+Current default:
 
-Use wording close to this:
+- `mission`
 
-> Stage 1 is now a working optimization/screening layer for parameterized
-> hexacopter design under single-motor fault conditions. It evaluates
-> fault-tolerance balance, single-fault hover survivability, and a
-> parameterized mass/cost surrogate. The current optimized designs are
-> reasonable for ACS/hover screening, but they are not yet mission-validated
-> because the present closed-loop simulation still diverges in the tested
-> fault case.
+Configured through:
 
-## Immediate Next Step
+```matlab
+cfg.objectives.stage2.names
+cfg.objectives.stage2.weights
+```
 
-After sharing Stage 1 with teammates, the next technical task should be:
+At the current stage, Stage 2 objectives are used for validation and
+comparison, not for the main optimization loop.
 
-- consolidate Stage 2 mission validation
-- integrate path-following evaluation into the framework
-- improve control/allocation logic enough to test whether Stage 1 candidates
-  are practically recoverable
+---
+
+## 5. Optimization Structure
+
+### Stage 1
+
+Primary optimization problem.
+
+Meaning:
+
+- optimize design variables
+- screen infeasible designs early
+- compare design trade-offs before mission-level tuning
+
+### Stage 2
+
+Secondary validation problem.
+
+Meaning:
+
+- test whether selected Stage 1 designs are controllable
+- evaluate mission tracking and recovery
+- support later controller tuning if needed
+
+This keeps the project focused on MDO rather than turning the main problem
+into controller co-design too early.
+
+---
+
+## 6. Current Interpretation
+
+What can be claimed safely now:
+
+- Stage 1 optimization is functioning
+- candidate designs can be ranked by fault-tolerance and cost-related metrics
+- Stage 2 mission evaluation exists for practical validation
+
+What should not be overstated:
+
+- that the final problem is already a full UAM mission optimization
+- that controller optimization is the main contribution
+- that the current cost model is a complete structural design model
+
+---
+
+## 7. Recommended Team Decision Points
+
+The next team decisions should be:
+
+1. final Stage 1 design variables
+2. final Stage 1 objective set
+3. whether any additional propulsion or structural variables should be added
+4. how much of Stage 2 should remain validation-only versus later becoming
+   part of the optimization
+
+---
+
+## 8. Near-Term Direction
+
+Recommended workflow:
+
+1. keep Stage 1 as the primary optimization path
+2. use Stage 2 to validate representative designs
+3. decide final decision variables and objectives with the team
+4. then extend the framework only where the final formulation requires it
+
+This is the most explainable and course-appropriate structure for the
+current project.

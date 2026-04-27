@@ -14,11 +14,12 @@ if isstruct(cfg_or_names) && isfield(cfg_or_names, 'vars')
     x_phys = lb + x(:) .* (ub - lb);
 
     eval_opts.mode = cfg.eval.mode;
-    eval_opts.weights = [cfg.weights.FII, cfg.weights.hover, ...
-                         cfg.weights.mission, cfg.weights.cost];
     eval_opts.fault_config = cfg.fault;
     eval_opts.sim_config = cfg.sim;
     eval_opts.verbose = false;
+    if isfield(cfg, 'objectives') && isfield(cfg.objectives, 'stage1')
+        eval_opts.objectives = cfg.objectives.stage1;
+    end
     if isfield(cfg, 'model')
         eval_opts.model = cfg.model;
     end
@@ -27,7 +28,8 @@ else
     x_phys = x(:);
     if nargin < 4 || isempty(eval_options)
         eval_opts.mode = 'acs';
-        eval_opts.weights = [0.35, 0.40, 0.00, 0.25];
+        eval_opts.objectives.names = {'FII', 'hover', 'cost'};
+        eval_opts.objectives.weights = [0.35, 0.40, 0.25];
         eval_opts.verbose = false;
     else
         eval_opts = eval_options;
