@@ -52,17 +52,27 @@ pts_4d = unique(round(V_all', 10), 'rows');   % [N_pts × 4]
 
 % Compute 4D convex hull and volume
 n_pts = size(pts_4d, 1);
-r = rank(pts_4d - mean(pts_4d, 1));   % intrinsic dimensionality check
 
-if n_pts >= 5 && r >= 4
+% SVD-based degeneracy check — faster and safer than rank() for near-degenerate inputs.
+% 'Qx' (exact arithmetic) in convhulln can hang indefinitely when the 4th singular
+% value is small (near-planar polytope), so we gate on the condition ratio first.
+% Threshold 1e-7: accounts for N-channel (cT*T_max) being ~200x smaller than Fz.
+pts_c  = pts_4d - mean(pts_4d, 1);
+sv     = svd(pts_c);
+well_conditioned = (n_pts >= 5) && (sv(4) / max(sv(1), 1e-12) > 1e-7);
+
+if well_conditioned
     try
-        [hull_idx, vol] = convhulln(pts_4d, {'Qt', 'Qx'});
+        % 'Qt' triangulates output; 'Pp' suppresses precision warnings.
+        % 'Qx' removed — it enables exact arithmetic which can hang on
+        % near-degenerate inputs encountered during optimisation sweeps.
+        [hull_idx, vol] = convhulln(pts_4d, {'Qt', 'Pp'});
     catch
         vol      = 0;
         hull_idx = [];
     end
 else
-    % Degenerate ACS (fewer than 4 independent virtual-control directions)
+    % Near-degenerate ACS: too few independent virtual-control directions
     vol      = 0;
     hull_idx = [];
 end

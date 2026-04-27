@@ -55,6 +55,12 @@ if ~isfield(options,'weights'),      options.weights      = [0.35, 0.40, 0.10, 0
 if ~isfield(options,'loe_for_sim'),  options.loe_for_sim  = [1;0;0;0;0;0]; end
 if ~isfield(options,'verbose'),      options.verbose      = false; end
 
+% Accept weights as struct (from mdo_config) or vector (legacy)
+if isstruct(options.weights)
+    ws = options.weights;
+    options.weights = [ws.FII, ws.hover, ws.mission, ws.cost];
+end
+
 if ~isfield(options.sim_config,'loe_vec')
     options.sim_config.loe_vec = options.loe_for_sim;
 end

@@ -47,8 +47,16 @@ function [d_opt, J_opt, history] = run_soo(d_init, options)
 %                 .x_best  : design vars at best J
 %                 .n_evals : total function evaluations
 
-% ── Defaults ──────────────────────────────────────────────────────────────
+% ── Accept cfg struct (from mdo_config) OR legacy options struct ───────────
 if nargin < 2, options = struct(); end
+
+% Detect if second arg is a full mdo_config struct
+if isstruct(options) && isfield(options, 'vars') && isfield(options, 'opt')
+    cfg     = options;
+    options = cfg_to_soo_options(cfg);
+end
+
+% ── Defaults (legacy path) ────────────────────────────────────────────────
 if ~isfield(options,'method'),    options.method    = 'ga';              end
 if ~isfield(options,'var_names'), options.var_names = {'Lx','Lyi','Lyo','T_max'}; end
 if ~isfield(options,'eval_mode'), options.eval_mode = 'acs';             end
@@ -57,6 +65,18 @@ if ~isfield(options,'max_iter'),  options.max_iter  = 80;                end
 if ~isfield(options,'pop_size'),  options.pop_size  = 50;                end
 if ~isfield(options,'plot_live'), options.plot_live = true;              end
 if ~isfield(options,'verbose'),   options.verbose   = true;              end
+
+% ── Route CMA-ES to dedicated runner ─────────────────────────────────────
+if strcmpi(options.method, 'cmaes')
+    if exist('cfg','var')
+        [d_opt, J_opt, history] = run_cmaes(d_init, cfg);
+    else
+        % Build minimal cfg from options struct
+        cfg_tmp = build_cfg_from_options(d_init, options);
+        [d_opt, J_opt, history] = run_cmaes(d_init, cfg_tmp);
+    end
+    return;
+end
 
 var_names = options.var_names;
 Nvar      = numel(var_names);
@@ -278,4 +298,75 @@ function v = getfield_safe(s, fname, idx, default)
     else
         v = default;
     end
+end
+
+% ── Convert mdo_config struct → legacy run_soo options struct ──────────────
+function options = cfg_to_soo_options(cfg)
+    active = cfg.vars.active;
+    options.method    = cfg.opt.method;
+    options.var_names = cfg.vars.names(active);
+    options.lb        = cfg.vars.lb(active);
+    options.ub        = cfg.vars.ub(active);
+    options.eval_mode = cfg.eval.mode;
+    options.weights   = [cfg.weights.FII, cfg.weights.hover, ...
+                         cfg.weights.mission, cfg.weights.cost];
+    options.max_iter  = cfg.opt.max_iter;
+    options.pop_size  = cfg.opt.ga_pop;
+    options.plot_live = cfg.opt.plot_live;
+    options.verbose   = cfg.opt.verbose;
+end
+
+% ── Build minimal mdo_config from a legacy options struct ──────────────────
+function cfg = build_cfg_from_options(d_init, options)
+    cfg = mdo_config();  % start from defaults
+
+    % Override variable registry
+    if isfield(options, 'var_names')
+        n = numel(options.var_names);
+        cfg.vars.names  = options.var_names;
+        cfg.vars.active = true(1, n);
+        % Rebuild x0 from d_init
+        x0 = zeros(1, n);
+        for k = 1:n
+            if isfield(d_init, options.var_names{k})
+                x0(k) = d_init.(options.var_names{k});
+            end
+        end
+        cfg.vars.x0 = x0;
+        if isfield(options, 'lb'), cfg.vars.lb = options.lb(:)'; end
+        if isfield(options, 'ub'), cfg.vars.ub = options.ub(:)'; end
+        % units: fill with '' for any unrecognised names
+        known_units = containers.Map({'Lx','Lyi','Lyo','T_max','cT','m'}, ...
+                                     {'m',  'm',  'm',  'N',   '-', 'kg'});
+        units = cell(1, n);
+        for k = 1:n
+            if isKey(known_units, options.var_names{k})
+                units{k} = known_units(options.var_names{k});
+            else
+                units{k} = '';
+            end
+        end
+        cfg.vars.units = units;
+    end
+
+    % Override optimizer settings
+    if isfield(options, 'max_iter'),  cfg.opt.max_iter  = options.max_iter;  end
+    if isfield(options, 'pop_size'),  cfg.opt.ga_pop    = options.pop_size;  end
+    if isfield(options, 'plot_live'), cfg.opt.plot_live = options.plot_live; end
+    if isfield(options, 'verbose'),   cfg.opt.verbose   = options.verbose;   end
+
+    % Derive CMA-ES budget from max_iter × pop_size (mirrors GA effort)
+    cfg.opt.max_evals = cfg.opt.max_iter * max(cfg.opt.ga_pop, 10);
+
+    % Override weights
+    if isfield(options, 'weights') && numel(options.weights) == 4
+        w = options.weights;
+        cfg.weights.FII     = w(1);
+        cfg.weights.hover   = w(2);
+        cfg.weights.mission = w(3);
+        cfg.weights.cost    = w(4);
+    end
+
+    % Override eval mode
+    if isfield(options, 'eval_mode'), cfg.eval.mode = options.eval_mode; end
 end

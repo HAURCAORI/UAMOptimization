@@ -75,11 +75,15 @@ fprintf('╚══════════════════════�
 
 % Add framework paths
 fw = fileparts(mfilename('fullpath'));
+addpath(fullfile(fw,'config'));
 addpath(fullfile(fw,'core'));
 addpath(fullfile(fw,'evaluation'));
 addpath(fullfile(fw,'metrics'));
 addpath(fullfile(fw,'optimization'));
 addpath(fullfile(fw,'analysis'));
+
+% ── Master configuration (all hyperparameters in one place) ──────────────
+cfg = mdo_config();
 
 %% ════════════════════════════════════════════════════════════════════════
 %  SECTION 1 — Baseline Design Evaluation
@@ -147,32 +151,14 @@ visualize_results(sw_2d,   'sweep');
 fprintf('\n  Section 2 complete [%.1f s]\n\n', toc(t_sec));
 
 %% ════════════════════════════════════════════════════════════════════════
-%  SECTION 3 — Single-Objective Optimization (GA → fmincon polish)
+%  SECTION 3 — Single-Objective Optimization (CMA-ES, config-driven)
 % ════════════════════════════════════════════════════════════════════════
 fprintf('━━━ Section 3: Single-Objective Optimization ━━━━━━━━━━━━━━━━━\n');
 t_sec = tic;
 
-% GA global search
-soo_ga.method    = 'ga';
-soo_ga.var_names = {'Lx','Lyi','Lyo','T_max'};
-soo_ga.lb        = [1.0,  1.0, 2.5,  8000];
-soo_ga.ub        = [5.0,  5.0, 9.0, 16000];
-soo_ga.eval_mode = 'acs';
-soo_ga.weights   = [0.35, 0.40, 0.00, 0.25];
-soo_ga.max_iter  = 80;
-soo_ga.pop_size  = 50;
-soo_ga.plot_live = true;
-soo_ga.verbose   = true;
-
-[d_opt_ga, J_ga, hist_ga] = run_soo(d_base, soo_ga);
-
-% SQP polish from GA result
-fprintf('\n  Polishing with fmincon (SQP)...\n');
-soo_sqp           = soo_ga;
-soo_sqp.method    = 'fmincon';
-soo_sqp.max_iter  = 100;
-soo_sqp.plot_live = false;
-[d_opt_soo, J_soo, hist_sqp] = run_soo(d_opt_ga, soo_sqp);
+% All settings come from mdo_config.m — edit that file to change optimizer,
+% weights, variable bounds, or evaluation mode.
+[d_opt_soo, J_soo, hist_soo] = run_soo(d_base, cfg);
 
 % Full ACS + sim validation of optimal design
 fprintf('\n  Full validation of SOO-optimal design:\n');
@@ -283,6 +269,7 @@ function plot_acs_3d(B, T_max, loe_vec, fcolor, alpha)
     if size(pts,1) >= 4 && rank(pts - mean(pts)) >= 3
         K = convhulln(pts,{'Qt','Qx'});
         trisurf(K, pts(:,1), pts(:,2), pts(:,3), ...
-                'FaceColor', fcolor, 'FaceAlpha', alpha, 'EdgeColor', 'none');
+                'FaceColor', fcolor, 'FaceAlpha', alpha, ...
+                'EdgeColor', fcolor * 0.55, 'LineWidth', 0.4);
     end
 end

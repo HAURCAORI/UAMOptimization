@@ -85,12 +85,14 @@ view(30, 20);
 if size(pts_nom,1) >= 4 && rank(pts_nom - mean(pts_nom)) >= 3
     K = convhulln(pts_nom, {'Qt','Qx'});
     trisurf(K, pts_nom(:,1), pts_nom(:,2), pts_nom(:,3), ...
-            'FaceColor', c_nom, 'EdgeColor', 'none', 'FaceAlpha', alph_n);
+            'FaceColor', c_nom, 'FaceAlpha', alph_n, ...
+            'EdgeColor', c_nom * 0.55, 'LineWidth', 0.4);
 end
 if size(pts_fault,1) >= 4 && rank(pts_fault - mean(pts_fault)) >= 3
     K = convhulln(pts_fault, {'Qt','Qx'});
     trisurf(K, pts_fault(:,1), pts_fault(:,2), pts_fault(:,3), ...
-            'FaceColor', c_fault, 'EdgeColor', 'none', 'FaceAlpha', alph_f);
+            'FaceColor', c_fault, 'FaceAlpha', alph_f, ...
+            'EdgeColor', c_fault * 0.55, 'LineWidth', 0.4);
 end
 legend({'Nominal ACS', sprintf('Motor %d faulted', worst_idx)}, 'Location','best');
 
