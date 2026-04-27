@@ -40,8 +40,15 @@ end
 g = 9.81;
 c = zeros(4, 1);
 
+% Build physical model once (vehicle_model path or legacy, depending on d)
+[UAM, Prop, ~] = hexacopter_params(d);
+m_total = UAM.m;
+B_mat   = UAM.B;
+T_max   = Prop.T_max;
+loe0    = zeros(6,1);
+
 %% c(1): Total hover thrust margin ≥ 10%
-c(1) = 1.10 * d.m * g - 6 * d.T_max;
+c(1) = 1.10 * m_total * g - 6 * T_max;
 
 %% c(2): Geometric separation (outer arm > inner + 0.1 m)
 if isfield(d,'Lyo') && isfield(d,'Lyi')
@@ -51,18 +58,13 @@ else
 end
 
 %% c(3): Worst-case single-fault ACS volume retention ≥ 5%
-[UAM, Prop, ~] = hexacopter_params(d);
-B_mat  = UAM.B;
-T_max  = Prop.T_max;
-loe0   = zeros(6,1);
-
 vol_nom = compute_acs_volume(B_mat, T_max, loe0);
 WCFR    = 1.0;
 if vol_nom > 0
     for k = 1:6
-        loe     = loe0;  loe(k) = 1;
-        vol_k   = compute_acs_volume(B_mat, T_max, loe);
-        WCFR    = min(WCFR, vol_k / vol_nom);
+        loe_k = loe0;  loe_k(k) = 1;
+        vol_k = compute_acs_volume(B_mat, T_max, loe_k);
+        WCFR  = min(WCFR, vol_k / vol_nom);
     end
 end
 c(3) = 0.05 - WCFR;
@@ -70,8 +72,8 @@ c(3) = 0.05 - WCFR;
 %% c(4): Hover feasibility utilization under worst single fault
 max_util = 0;
 for k = 1:6
-    loe = loe0;  loe(k) = 1;
-    [~, util] = hover_feasibility(B_mat, T_max, d.m, g, loe);
+    loe_k = loe0;  loe_k(k) = 1;
+    [~, util] = hover_feasibility(B_mat, T_max, m_total, g, loe_k);
     if isfinite(util)
         max_util = max(max_util, util);
     else
@@ -79,7 +81,7 @@ for k = 1:6
     end
 end
 if ~isfinite(max_util)
-    c(4) = 10.0;   % finite large value (GA requires no Inf/NaN in constraints)
+    c(4) = 10.0;   % finite large value (GA/fmincon requires no Inf/NaN)
 else
     c(4) = max_util - 1.0;
 end

@@ -31,6 +31,9 @@ function [UAM, Prop, Env] = hexacopter_params(d)
 %
 %   Inputs:
 %     d   - Design struct (see design_default.m)
+%           When d.m_payload is present, activates physics-based
+%           vehicle_model.m (Delbecq 2020 scaling).  Otherwise uses the
+%           legacy fixed-mass path for backward compatibility.
 %
 %   Outputs:
 %     UAM   - Vehicle struct
@@ -41,36 +44,46 @@ function [UAM, Prop, Env] = hexacopter_params(d)
 Env.g   = 9.81;    % [m/s²]
 Env.rho = 1.225;   % [kg/m³]
 
-% ── Inertia calibration to baseline geometry ─────────────────────────────
-Lx_b  = 2.65;   Lyi_b = 2.65;   Lyo_b = 5.50;
-Ix_b  = 12000;  Iy_b  = 9400;   Iz_b  = 20000;   % [kg·m²]
+% ── Dispatch: physics-based model vs legacy fixed-mass path ──────────────
+if isfield(d, 'm_payload')
+    % ── Physics-based vehicle model (DATCOM-style scaling laws) ──────────
+    mdl = vehicle_model(d);
 
-% Effective motor mass per axis (calibrated separately because real
-% vehicle has distributed structural mass beyond motor point masses)
-mm_Ix = Ix_b / (4*Lyi_b^2 + 2*Lyo_b^2);  % ≈ 135.5 kg  (roll axis)
-mm_Iy = Iy_b / (4*Lx_b^2);               % ≈ 335.0 kg  (pitch axis)
+    UAM.m   = mdl.m;
+    UAM.Lx  = mdl.Lx;
+    UAM.Lyi = mdl.Lyi;
+    UAM.Lyo = mdl.Lyo;
+    UAM.Ix  = mdl.Ixx;
+    UAM.Iy  = mdl.Iyy;
+    UAM.Iz  = mdl.Izz;
+    UAM.B   = mdl.B;
+    UAM.model = mdl;   % attach full model for downstream cost computation
 
-% Residual body inertia at CG (difference between total and motor share)
-% By construction these are zero at baseline; they stay zero for scaled
-% designs (consistent scaling assumption).
+    Prop.T_max = mdl.T_max;
+    Prop.T_min = 0;
+    Prop.cT    = mdl.cT;
+    Prop.tau   = 0.04;
 
-% ── Vehicle struct ───────────────────────────────────────────────────────
-UAM.m   = d.m;
-UAM.Lx  = d.Lx;
-UAM.Lyi = d.Lyi;
-UAM.Lyo = d.Lyo;
+else
+    % ── Legacy path (fixed mass, calibrated effective motor masses) ───────
+    Lx_b  = 2.65;   Lyi_b = 2.65;   Lyo_b = 5.50;
+    Ix_b  = 12000;  Iy_b  = 9400;
 
-% Parametric inertia: scaled from baseline via arm-length geometry
-UAM.Ix  = mm_Ix * (4*d.Lyi^2 + 2*d.Lyo^2);
-UAM.Iy  = mm_Iy * (4*d.Lx^2);
-UAM.Iz  = UAM.Ix + UAM.Iy;    % ≈ perpendicular-axis theorem
+    mm_Ix = Ix_b / (4*Lyi_b^2 + 2*Lyo_b^2);  % ≈ 135.5 kg  (roll axis)
+    mm_Iy = Iy_b / (4*Lx_b^2);               % ≈ 335.0 kg  (pitch axis)
 
-% Control effectiveness matrix (build from current geometry)
-UAM.B   = build_B_matrix(d.Lx, d.Lyi, d.Lyo, d.cT);
+    UAM.m   = d.m;
+    UAM.Lx  = d.Lx;
+    UAM.Lyi = d.Lyi;
+    UAM.Lyo = d.Lyo;
+    UAM.Ix  = mm_Ix * (4*d.Lyi^2 + 2*d.Lyo^2);
+    UAM.Iy  = mm_Iy * (4*d.Lx^2);
+    UAM.Iz  = UAM.Ix + UAM.Iy;
+    UAM.B   = build_B_matrix(d.Lx, d.Lyi, d.Lyo, d.cT);
 
-% ── Propulsion struct ─────────────────────────────────────────────────────
-Prop.T_max = d.T_max;
-Prop.T_min = 0;
-Prop.cT    = d.cT;
-Prop.tau   = 0.04;    % [s] first-order motor time constant (fixed hardware)
+    Prop.T_max = d.T_max;
+    Prop.T_min = 0;
+    Prop.cT    = d.cT;
+    Prop.tau   = 0.04;
+end
 end

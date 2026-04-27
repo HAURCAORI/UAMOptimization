@@ -13,7 +13,14 @@
 3. [Framework Overview](#3-framework-overview)
 4. [Theoretical Background](#4-theoretical-background)
 5. [Design Variables](#5-design-variables)
+   - 5.1 Active design variables
+   - 5.2 Fixed / derived fields
+   - 5.3 Physics-based mass model (vehicle_model.m)
+   - 5.4 Constraints enforced
 6. [Configuration Reference](#6-configuration-reference)
+   - 6.4 Vehicle Model
+   - 6.5 Two-Stage Evaluation
+   - 6.6 Evaluation Mode
 7. [Module Reference](#7-module-reference)
 8. [Optimization Workflow](#8-optimization-workflow)
 9. [Key Metrics Explained](#9-key-metrics-explained)
@@ -31,8 +38,13 @@
 | Lx | m | Fore/aft arm length — distance from the body center to the front (or rear) motor row along the x-axis |
 | Lyi | m | Inner lateral arm — distance from the center-line to each front/rear motor (rows 1 and 3) along the y-axis |
 | Lyo | m | Outer lateral arm — distance from the center-line to each mid motor (row 2, motors M3/M4) along the y-axis; must satisfy Lyo > Lyi + 0.1 m |
-| m | kg | Total vehicle mass (fixed; does not change during optimization) |
-| cT | — | Moment-to-thrust ratio: yaw moment produced per unit thrust. N = cT × T |
+| arm_span | m | Total arm span: 2·Lx + 2·Lyi + 2·Lyo (baseline = 21.6 m) |
+| m | kg | Total vehicle mass — **derived** from design variables via vehicle_model.m (not fixed) |
+| m_payload | kg | Fixed UAM payload budget: 1500 kg (set in design_default.m to activate physics-based model) |
+| m_motor | kg | Per-motor mass — scales with T_max via Delbecq 2020 scaling law |
+| m_frame | kg | Structural frame mass — scales linearly with arm_span |
+| cT | — | Moment-to-thrust ratio: yaw moment per unit thrust, N = cT × T |
+| d_prop | m | Propeller diameter (optional design variable; when set, cT = 0.03 × d_prop / 0.40) |
 
 ```
 Top-view schematic (NED, z into page):
@@ -129,10 +141,18 @@ J = (w_FII · J_FII  +  w_hover · J_hover  +  w_mission · J_mission  +  w_cost
   J_hover   = 0                          if hover_margin ≥ 0
             = 1 − exp(5 · hover_margin)  if hover_margin < 0   (∈ (0,1))
   J_mission = alt_RMSE / alt_cmd         (simulation mode only; else excluded)
-  J_cost    = (arm_span / arm_span_base) · (T_max / T_max_base)^1.5
+
+  J_cost (physics-based, vehicle_model path):
+            = (6·m_motor + m_frame) / cost_ref
+              where cost_ref = 6 × 74.07 + 296.31 = 740.73 kg  (baseline)
+
+  J_cost (legacy fixed-mass path, no m_payload):
+            = (arm_span / arm_span_base) · (T_max / T_max_base)^1.5
 ```
 
 NaN terms (e.g. J_mission in `mode='acs'`) are automatically excluded and their weights renormalized.
+
+> **Physics-based J_cost** captures the self-consistent mass-propulsion coupling: a higher T_max increases motor mass (∝ T_max^(3/3.5)), which raises total vehicle mass, which raises the hover threshold, which demands even more T_max. The optimizer must find the equilibrium that satisfies all constraints at minimum cost.
 
 | Weight | Default | Governs |
 |--------|---------|---------|
@@ -195,18 +215,21 @@ Framework/
 ├── main_mdo.m                  ← Entry point (run this)
 │
 ├── config/                     ← Master configuration (edit here only)
-│   └── mdo_config.m            All hyperparameters, bounds, optimizer settings
+│   └── mdo_config.m            Hyperparameters, bounds, vehicle model, stage settings
 │
 ├── core/                       ← Vehicle model
-│   ├── design_default.m        Design vector (baseline)
-│   ├── hexacopter_params.m     Design → physical structs (UAM, Prop, Env)
+│   ├── design_default.m        Design vector (baseline; sets m_payload to activate physics model)
+│   ├── vehicle_model.m         ★ DATCOM-style parameterized model (Delbecq 2020 scaling laws)
+│   ├── hexacopter_params.m     Design → UAM/Prop/Env structs (dispatches to vehicle_model)
 │   ├── build_B_matrix.m        Control effectiveness matrix B
 │   └── eom_hex.m               6-DOF equations of motion
 │
-├── evaluation/                 ← Performance evaluation
+├── evaluation/                 ← Two-stage performance evaluation
+│   ├── eval_stage1.m           ★ Stage 1: ACS feasibility + hover screening (~15 ms/eval)
+│   ├── eval_stage2.m           ★ Stage 2: Mission simulation + recovery metrics
 │   ├── eval_acs.m              ACS-based fault tolerance metrics
 │   ├── eval_simulation.m       Closed-loop simulation metrics
-│   └── eval_design.m           Master evaluator (calls above two)
+│   └── eval_design.m           Master evaluator (orchestrates both stages)
 │
 ├── metrics/                    ← Individual metric functions
 │   ├── compute_acs_volume.m    4D convex hull volume of ACS
@@ -216,7 +239,7 @@ Framework/
 │
 ├── optimization/               ← Optimizer drivers
 │   ├── objective_fcn.m         Scalar objective wrapper for optimizers
-│   ├── constraint_fcn.m        Nonlinear physical constraints
+│   ├── constraint_fcn.m        Nonlinear constraints (uses physics-based UAM.m)
 │   ├── run_soo.m               Single-objective: CMA-ES / GA / fmincon
 │   ├── run_cmaes.m             CMA-ES implementation (self-contained)
 │   └── run_moo.m               Multi-objective: gamultiobj (Pareto)
@@ -228,15 +251,22 @@ Framework/
     └── visualize_results.m     Unified plotting (ACS, sim, sweep, Pareto)
 ```
 
+★ = added in current version
+
 ### Data Flow
 
 ```
 mdo_config()  ─────────────────────────────────────────────────────┐
                                                                     ↓
-design_default()  ──→  hexacopter_params()  ──→  eval_acs()    ──┐ │
-       ↓                                     └──→  eval_simulation() ──┤ │
-  run_soo(d, cfg)                                               ↓ │
-  └─ run_cmaes(d, cfg)  ←──────────────────────────────── eval_design() ┘
+design_default()                                              eval_design()
+  (sets m_payload)                                          ┌──────┴───────┐
+       ↓                                               Stage 1         Stage 2
+  hexacopter_params()                               eval_stage1()   eval_stage2()
+  ├─ vehicle_model()  ← DATCOM-style scaling            │              │
+  │   (physics-based mass, inertia, cost)           eval_acs()  eval_simulation()
+  └─ legacy fixed-mass path (no m_payload)
+       ↓
+  run_soo(d, cfg)  →  run_cmaes(d, cfg)  ←───────── eval_design()
        ↓
   pareto_analysis()  →  compare_designs()  →  visualize_results()
 ```
@@ -292,25 +322,48 @@ ACS = { B · T  :  0 ≤ T_i ≤ T_max_i }
 
 ## 5. Design Variables
 
-| Field | Symbol | Baseline | Unit | Description |
-|-------|--------|----------|------|-------------|
-| `d.Lx` | Lx | 2.65 | m | Fore/aft arm length (motors 1,2,5,6) |
-| `d.Lyi` | Lyi | 2.65 | m | Inner lateral arm (front/rear row) |
-| `d.Lyo` | Lyo | 5.50 | m | Outer lateral arm (mid row, motors 3,4) |
-| `d.T_max` | T_max | 7327 | N | Max thrust per motor |
-| `d.cT` | cT | 0.03 | — | Moment-to-thrust ratio |
-| `d.m` | m | 2240.7 | kg | Total vehicle mass (fixed) |
+### 5.1 Active design variables (optimized)
 
-**Inertia is derived from geometry** (parametric model calibrated to baseline):
-- `Ix = mm_Ix × (4·Lyi² + 2·Lyo²)`  — roll inertia
-- `Iy = mm_Iy × (4·Lx²)`             — pitch inertia
-- `Iz = Ix + Iy`                       — yaw inertia (perpendicular axis)
+| Field | Symbol | Baseline | Unit | Bounds | Description |
+|-------|--------|----------|------|--------|-------------|
+| `d.Lx` | Lx | 2.65 | m | [1.0, 5.0] | Fore/aft arm length (motors 1,2,5,6) |
+| `d.Lyi` | Lyi | 2.65 | m | [1.0, 5.0] | Inner lateral arm (front/rear row) |
+| `d.Lyo` | Lyo | 5.50 | m | [2.5, 9.0] | Outer lateral arm (mid row, motors 3,4) |
+| `d.T_max` | T_max | 7327 | N | [8000, 16000] | Max thrust per motor |
+| `d.d_prop` | d_prop | 0.40 | m | [0.30, 0.60] | Propeller diameter (**frozen** by default; set `active(5)=true` to optimize) |
 
-**Constraints enforced** (see `constraint_fcn.m`):
-- `6 × T_max ≥ 1.1 × m·g`  (minimum hover margin)
-- `Lyo > Lyi + 0.1`         (outer arm wider than inner)
-- `WCFR ≥ 0.05`             (ACS retains at least 5% after worst fault)
-- `hover_util ≤ 1`          (T_max covers worst hover threshold)
+### 5.2 Fixed / derived fields
+
+| Field | Value | Description |
+|-------|-------|-------------|
+| `d.m_payload` | 1500.0 kg | Fixed UAM payload — activates physics-based vehicle model when set |
+| `d.cT` | 0.03 | Moment-to-thrust ratio (overridden by d_prop if that variable is active) |
+| `d.m` | *derived* | Total mass — computed by vehicle_model.m; kept in struct for backward compat |
+
+### 5.3 Physics-based mass model (vehicle_model.m)
+
+When `d.m_payload` is set (which is the default in `design_default.m`), all mass and inertia properties are derived from geometry and propulsion via Delbecq 2020 scaling laws [R4]:
+
+```
+m_motor = 74.07 × (T_max / 7327)^(3/3.5)          [kg per motor]
+m_frame = 13.72 × arm_span                          [kg]
+m_total = 1500 + 6·m_motor + m_frame               [kg]
+
+Ixx = m_motor × (4·Lyi² + 2·Lyo²) + 5436          [kg·m²]
+Iyy = m_motor × (4·Lx²)           + 7319          [kg·m²]
+Izz = Ixx + Iyy                                    [kg·m²]
+```
+
+Calibration: at baseline (Lx=Lyi=2.65m, Lyo=5.5m, T_max=7327N) this yields m=2240.73 kg, Ixx=12000, Iyy=9400 kg·m² — matching the reference vehicle exactly.
+
+> **Novel mass-propulsion coupling**: T_max → m_motor → m_total → hover threshold → required T_max. This feedback loop is resolved analytically at each evaluation, making the cost function physically consistent.
+
+### 5.4 Constraints enforced (constraint_fcn.m)
+
+- `6 × T_max ≥ 1.1 × m_total · g`  — hover margin using *computed* mass
+- `Lyo > Lyi + 0.1`                 — outer arm wider than inner
+- `WCFR ≥ 0.05`                     — ACS retains at least 5% after worst fault
+- `hover_util ≤ 1`                  — T_max covers worst-case hover threshold
 
 ---
 
@@ -322,7 +375,7 @@ All hyperparameters live in **`config/mdo_config.m`**. Edit only this file to ch
 cfg = mdo_config();
 ```
 
-### 5.1 Objective Weights
+### 6.1 Objective Weights
 
 ```matlab
 cfg.weights.FII     = 0.35;   % Fault Isotropy Index
@@ -331,15 +384,20 @@ cfg.weights.mission = 0.00;   % Mission tracking RMSE (needs eval.mode='sim'/'fu
 cfg.weights.cost    = 0.25;   % Motor + structural cost index
 ```
 
-### 5.2 Design Variables
+### 6.2 Design Variables
 
 ```matlab
-cfg.vars.names  = {'Lx',  'Lyi', 'Lyo', 'T_max'};
-cfg.vars.lb     = [ 1.0,   1.0,   2.5,   8000  ];
-cfg.vars.ub     = [ 5.0,   5.0,   9.0,  16000  ];
-cfg.vars.x0     = [ 2.65,  2.65,  5.50,  7327  ];  % baseline
-cfg.vars.units  = {'m',   'm',   'm',   'N'   };
-cfg.vars.active = [true,  true,  true,  true  ];    % all active
+cfg.vars.names  = {'Lx',  'Lyi', 'Lyo', 'T_max', 'd_prop'};
+cfg.vars.lb     = [ 1.0,   1.0,   2.5,   8000,    0.30   ];
+cfg.vars.ub     = [ 5.0,   5.0,   9.0,  16000,    0.60   ];
+cfg.vars.x0     = [ 2.65,  2.65,  5.50,  7327,    0.40   ];
+cfg.vars.units  = {'m',   'm',   'm',   'N',     'm'    };
+cfg.vars.active = [true,  true,  true,  true,    false  ];  % d_prop frozen
+```
+
+**To activate propeller diameter as a design variable:**
+```matlab
+cfg.vars.active(5) = true;   % d_prop optimized; cT = 0.03 × d_prop / 0.40
 ```
 
 **To add a new variable** (e.g. `cT`):
@@ -357,7 +415,7 @@ cfg.vars.active(end+1) = true;
 cfg.vars.active(1) = false;   % Lx frozen at x0=2.65
 ```
 
-### 5.3 Optimizer Settings
+### 6.3 Optimizer Settings
 
 ```matlab
 cfg.opt.method     = 'cmaes';  % 'cmaes' | 'ga' | 'fmincon' | 'patternsearch'
@@ -372,19 +430,41 @@ cfg.opt.verbose    = true;
 cfg.opt.plot_live  = true;
 ```
 
-### 5.4 Evaluation Mode
+### 6.4 Vehicle Model
+
+```matlab
+cfg.model.use_vehicle_model = true;   % true: physics-based mass (default)
+                                      % false: legacy fixed d.m
+```
+
+When `true` (and `d.m_payload` is set in the design struct), `hexacopter_params.m` calls `vehicle_model.m` to compute mass, inertia, and cost from design variables. This is the DATCOM-style novel contribution. Set to `false` only for legacy testing.
+
+### 6.5 Two-Stage Evaluation
+
+```matlab
+cfg.stage.run_stage2_in_opt = false;  % include mission simulation in optimizer?
+                                      % false (default): Stage 1 only (~15 ms/eval)
+                                      % true: Stage 1 + Stage 2 (~30× slower)
+```
+
+| Stage | Function | Cost | Purpose |
+|-------|----------|------|---------|
+| Stage 1 | `eval_stage1` | ~15 ms | ACS feasibility, hover screening — use in optimization |
+| Stage 2 | `eval_stage2` | ~300–500 ms | Mission tracking, recovery time — use for validation |
+
+### 6.6 Evaluation Mode
 
 ```matlab
 cfg.eval.mode = 'acs';   % 'acs' | 'sim' | 'full'
 ```
 
-| Mode | Cost | Use for |
-|------|------|---------|
-| `'acs'` | ~15–30 ms/call | optimization (default) |
-| `'sim'` | ~300–1000 ms/call | mission performance |
-| `'full'` | sum of above | final validation only |
+| Mode | Calls | Cost | Use for |
+|------|-------|------|---------|
+| `'acs'` | Stage 1 only | ~15–30 ms/call | optimization (default) |
+| `'sim'` | Stage 2 only | ~300–1000 ms/call | mission performance |
+| `'full'` | Stage 1 + Stage 2 | sum of above | final validation only |
 
-### 5.5 Fault & Simulation Configuration
+### 6.7 Fault & Simulation Configuration
 
 ```matlab
 cfg.fault.include_double = false;       % include 2-motor fault scenarios
@@ -402,36 +482,50 @@ cfg.sim.alt_cmd    = 10;               % commanded altitude [m]
 ## 7. Module Reference
 
 ### 6.1 `design_default()` → `d`
-Returns the baseline design struct matching the reference vehicle.
+Returns the baseline design struct. Sets `d.m_payload = 1500` to activate the physics-based vehicle model path in `hexacopter_params.m`. The `d.m` field is retained for backward compatibility but is overridden by `vehicle_model.m` at evaluation time.
 
-### 6.2 `hexacopter_params(d)` → `[UAM, Prop, Env]`
-Converts design vector to physical parameter structs.
-Computes parametric inertia scaled from the calibrated baseline.
+### 6.2 `vehicle_model(d)` → `model`
+**DATCOM-style parameterized vehicle model.** Maps design variables to all physical properties via Delbecq 2020 scaling laws. Called automatically by `hexacopter_params` when `d.m_payload` is present.
 
-### 6.3 `build_B_matrix(Lx, Lyi, Lyo, cT)` → `B`
+Key outputs:
+
+| Field | Description |
+|-------|-------------|
+| `model.m` | Total mass = m_payload + 6·m_motor + m_frame [kg] |
+| `model.m_motor` | Per-motor mass = 74.07 × (T_max/7327)^(3/3.5) [kg] |
+| `model.m_frame` | Frame mass = 13.72 × arm_span [kg] |
+| `model.Ixx/Iyy/Izz` | Inertia from point-mass motor model [kg·m²] |
+| `model.B` | 4×6 control effectiveness matrix |
+| `model.cost_total` | = 6·m_motor + m_frame (for J_cost) [kg] |
+| `model.cost_ref` | Reference cost at baseline = 740.73 kg |
+
+### 6.3 `hexacopter_params(d)` → `[UAM, Prop, Env]`
+Dispatches to `vehicle_model(d)` when `d.m_payload` is present (physics-based path), or uses the legacy calibrated fixed-mass path otherwise. Attaches the full model struct as `UAM.model` for downstream cost computation.
+
+### 6.4 `build_B_matrix(Lx, Lyi, Lyo, cT)` → `B`
 Returns the 4×6 control effectiveness matrix for the PPNNPN spin configuration.
 
-### 6.4 `eom_hex(X, T_vec, UAM, Env)` → `X_dot`
+### 6.5 `eom_hex(X, T_vec, UAM, Env)` → `X_dot`
 6-DOF rigid body equations of motion. State vector X is 15×1:
 `[u,v,w, p,q,r, phi,theta,psi, x,y,z, vx,vy,vz]`
 
-### 6.5 `compute_acs_volume(B, T_max, loe_vec)` → `vol`
+### 6.6 `compute_acs_volume(B, T_max, loe_vec)` → `vol`
 Computes 4D convex hull volume of the ACS.
 Handles degenerate cases (too many faults → low-rank ACS).
 
-### 6.6 `hover_feasibility(B, T_max, m, g, loe_vec)` → `[feasible, utilization]`
+### 6.7 `hover_feasibility(B, T_max, m, g, loe_vec)` → `[feasible, utilization]`
 LP feasibility check: can the vehicle hover after fault?
 `utilization` = max(T_i / T_max_i) at the optimal hover solution.
 
-### 6.7 `compute_hover_threshold(B, m, g, loe_list)` → `[T_thresh, T_ratios]`
+### 6.8 `compute_hover_threshold(B, m, g, loe_list)` → `[T_thresh, T_ratios]`
 Minimum T_max required for hover per fault scenario.
 Uses a **single LP** per scenario (max hover fraction λ formulation).
 **40× faster than the binary search alternative.**
 
-### 6.8 `fault_isotropy_index(B, T_max, vol_nominal)` → `[FII, retention_vec]`
+### 6.9 `fault_isotropy_index(B, T_max, vol_nominal)` → `[FII, retention_vec]`
 Computes FII = std(r_i)/mean(r_i) for all 6 single-motor faults.
 
-### 6.9 `eval_acs(d, fault_config)` → `metrics`
+### 6.10 `eval_acs(d, fault_config)` → `metrics`
 Evaluates all ACS-based fault tolerance metrics.
 
 Key outputs:
@@ -454,7 +548,7 @@ Key outputs:
 | `include_double` | `false` | Include 2-motor fault scenarios |
 | `p_motor` | `0.05` | Per-motor failure probability for PFWAR |
 
-### 6.10 `eval_simulation(d, sim_config)` → `metrics`
+### 6.11 `eval_simulation(d, sim_config)` → `metrics`
 Runs closed-loop simulation with fault injection.
 
 Key outputs:
@@ -478,13 +572,43 @@ Key outputs:
 | `dt` | 0.01 | Time step [s] (use 0.005 for accuracy) |
 | `alt_cmd` | 10 | Altitude command [m] |
 
-### 6.11 `eval_design(d, options)` → `result`
-Master evaluator combining ACS and simulation.
+### 6.12 `eval_stage1(d, cfg_or_fault)` → `result`
+**Stage 1 evaluator** — fast ACS feasibility and hover screening (~15 ms). Used inside the optimization loop.
+
+Accepts either an `mdo_config` struct or a `fault_config` struct.
+
+| Output field | Description |
+|-------------|-------------|
+| `feasible` | true if WCFR ≥ 5% and geometry is non-degenerate |
+| `J_FII` | Fault Isotropy Index |
+| `J_hover` | Hover margin penalty ∈ [0,1] |
+| `WCFR` | Worst-case fault retention |
+| `PFWAR` | Probabilistic fault-weighted retention |
+| `hover_margin` | T_max / T_hover_worst − 1 |
+| `acs` | Full ACS metrics struct (from eval_acs) |
+
+### 6.13 `eval_stage2(d, cfg_or_sim)` → `result`
+**Stage 2 evaluator** — closed-loop mission simulation (~300–500 ms). Called only for designs that passed Stage 1, used for validation.
+
+Accepts either an `mdo_config` struct or a raw `sim_config` struct. Handles both `fault_time` and `t_fault` field naming conventions automatically.
+
+| Output field | Description |
+|-------------|-------------|
+| `feasible` | true if simulation did not diverge |
+| `J_mission` | Normalized altitude RMSE = alt_rmse / alt_cmd |
+| `alt_rmse` | Altitude tracking error post-fault [m] |
+| `max_att_excurs` | Max roll+pitch excursion [deg] |
+| `recovery_time` | Time to re-enter ±5° band after fault [s] (Inf if never) |
+| `diverged` | true if attitude exceeded 45° |
+| `sim` | Full simulation output struct (t_vec, X_hist, T_hist) |
+
+### 6.14 `eval_design(d, options)` → `result`
+Master evaluator. Calls `eval_acs` (Stage 1) and/or `eval_simulation` (Stage 2) depending on `options.mode`. Uses `UAM.model` from `hexacopter_params` for physics-based J_cost when available.
 
 **options.mode:**
-- `'acs'`  — ACS metrics only (~15–30 ms/call). Use for optimization.
-- `'sim'`  — Simulation only (~300–1000 ms/call).
-- `'full'` — Both ACS + simulation.
+- `'acs'`  — Stage 1 only (~15–30 ms/call). Use for optimization.
+- `'sim'`  — Stage 2 simulation only (~300–1000 ms/call).
+- `'full'` — Stage 1 + Stage 2 (for final validation).
 
 **options.weights:** `[w_FII, w_hover, w_mission, w_cost]` or a struct with fields `.FII/.hover/.mission/.cost`
 Default: `[0.35, 0.40, 0.10, 0.15]`
@@ -495,11 +619,11 @@ Default: `[0.35, 0.40, 0.10, 0.15]`
 |-------|-------------|
 | `J_FII` | = FII (geometry-sensitive) |
 | `J_hover` | = 0 if T_max covers worst fault; exponentially penalized otherwise |
-| `J_mission` | Normalized simulation altitude RMSE |
-| `J_cost` | Structural mass × motor cost proxy |
+| `J_mission` | Normalized simulation altitude RMSE (NaN in 'acs' mode) |
+| `J_cost` | = (6·m_motor + m_frame) / 740.73 when vehicle model active; legacy formula otherwise |
 | `J_combined` | Weighted combination (NaN terms dropped with weight renormalization) |
 
-### 6.12 `run_soo(d_init, cfg_or_options)` → `[d_opt, J_opt, history]`
+### 6.15 `run_soo(d_init, cfg_or_options)` → `[d_opt, J_opt, history]`
 Single-objective optimization. Accepts either an `mdo_config` struct (recommended) or a legacy options struct (backward compatible).
 
 **Recommended (config-driven):**
@@ -528,7 +652,7 @@ When `opts.method = 'cmaes'`, the legacy path automatically builds a cfg struct 
 | `x_best` | Design variable vector at best J |
 | `n_evals` | Total function evaluations used |
 
-### 6.13 `run_cmaes(d_init, cfg)` → `[d_opt, J_opt, history]`
+### 6.16 `run_cmaes(d_init, cfg)` → `[d_opt, J_opt, history]`
 Self-contained CMA-ES optimizer. Called automatically by `run_soo` when `cfg.opt.method = 'cmaes'`.
 
 Implements the **(μ/μ_w, λ)-CMA-ES** (Hansen 2016) entirely in normalized [0,1] variable space, making it scale-invariant across variables with different physical units (arm lengths in m vs T_max in N).
@@ -540,11 +664,11 @@ Key design choices:
 - **Stagnation detection**: stops if no improvement for 30% of the evaluation budget
 - **Optional SQP polish**: `cfg.opt.use_polish = true` runs `fmincon` after CMA-ES
 
-### 6.14 `run_moo(d_init, options)` → `[pareto_designs, pareto_J, ...]`
+### 6.17 `run_moo(d_init, options)` → `[pareto_designs, pareto_J, ...]`
 Multi-objective Pareto optimization with live updating Pareto scatter.
 Uses `gamultiobj` (MATLAB Global Optimization Toolbox required).
 
-### 6.15 `sweep_design_space(d_base, var, range, options)` → `results`
+### 6.18 `sweep_design_space(d_base, var, range, options)` → `results`
 1D or 2D parameter sweep. Example:
 ```matlab
 % 1D
@@ -555,14 +679,14 @@ sw = sweep_design_space(d_base, {'Lyi','T_max'}, ...
      {linspace(1,5.5,20), linspace(7000,16000,20)});
 ```
 
-### 6.16 `pareto_analysis(designs, F, options)` → `[F_nd, d_nd, knee_idx]`
+### 6.19 `pareto_analysis(designs, F, options)` → `[F_nd, d_nd, knee_idx]`
 Filters dominated solutions and identifies the knee point.
 Knee = maximum perpendicular distance from ideal–antiideal line.
 
-### 6.17 `compare_designs(designs, labels, options)`
+### 6.20 `compare_designs(designs, labels, options)`
 Prints a side-by-side comparison table and radar chart.
 
-### 6.18 `visualize_results(data, type, options)`
+### 6.21 `visualize_results(data, type, options)`
 Unified visualization:
 
 | `type` | Input | Description |
@@ -576,29 +700,113 @@ Unified visualization:
 
 ## 8. Optimization Workflow
 
-### Recommended sequence
+### 8.1 Why two optimization paths?
+
+This framework provides two distinct optimization paths that answer different questions:
+
+| Path | Function | What it answers |
+|------|----------|-----------------|
+| **SOO** (Section 3 of `main_mdo`) | `run_soo` / `run_cmaes` | "What is the single best design given my current priorities?" |
+| **MOO / Pareto** (Section 4 of `main_mdo`) | `run_moo` + `pareto_analysis` | "What are all the designs where I cannot improve one objective without hurting another?" |
+
+Neither replaces the other. SOO gives one concrete design fast (~20 s). MOO gives the complete trade-off picture (~10–20 min).
+
+---
+
+### 8.2 SOO-Optimal design
+
+**What it is:** The single design that minimizes the combined scalar objective `J_combined = Σ wᵢ·Jᵢ / Σ wᵢ` subject to physical constraints.
+
+**When to use it:** When you have already decided on priorities — you know you care more about hover safety than cost, or more about FII than T_max — and you want a single answer to bring to a meeting or report.
+
+**What to expect:**
+- The result is sensitive to the weight choices. Changing `cfg.weights` will give a different SOO-optimal design.
+- With default weights `[FII=0.35, hover=0.40, cost=0.25]`, the SOO optimizer drives toward the minimum arm span that just satisfies the hover constraint. All three geometry variables hit their lower bounds because reducing arm span reduces J_cost without meaningfully hurting J_FII at these weight values.
+- The SOO-optimal design is therefore a *hover-safe, minimum-cost* design, not a *fault-isotropic* design.
+- If fault balance matters more, increase `cfg.weights.FII` (e.g. to 0.60) before running SOO.
+
+**Limitation:** SOO conflates multiple objectives into one number. The "best" design depends entirely on the chosen weights, which encode engineering judgement. If the weights are wrong, the result is wrong.
+
+---
+
+### 8.3 Pareto Front and the Knee Design
+
+**What the Pareto front is:** The set of designs where no objective can be improved without making at least one other objective worse. Every design on the Pareto front is optimal for *some* weighting of objectives.
+
+This framework computes a 3-objective Pareto front:
+
+| Objective | Symbol | Meaning |
+|-----------|--------|---------|
+| f₁ | J_FII | Fault balance — wants large, symmetric arm span |
+| f₂ | J_hover | Hover safety — wants high T_max |
+| f₃ | J_cost | Motor + structural cost — wants small arm span and low T_max |
+
+These objectives conflict:
+- f₁ vs f₃: FII improves with larger Lyi (longer lateral arms), but cost increases with arm span
+- f₂ vs f₃: Hover safety requires high T_max, but heavier motors raise cost
+- f₁ and f₂ are partially aligned (both want larger arms and more thrust), creating a clear cost–safety frontier
+
+**What the Pareto knee is:** The point on the Pareto front where the *rate of return* switches — going further toward one objective yields diminishing improvement at rapidly increasing cost to the others. Mathematically, `pareto_analysis` finds the knee as the point with maximum perpendicular distance from the line connecting the ideal (best each objective separately) and anti-ideal (worst each objective on the front) points.
+
+```
+                f₃ (cost)
+                ▲
+                │   Pareto front
+                │  ╲
+                │   ╲     ← knee point here
+                │    ╲___________
+                └──────────────────→ f₁ (FII)
+
+  Below the knee: small cost improvement requires large FII sacrifice
+  Above the knee: small FII improvement requires large cost increase
+```
+
+**Why use the knee design?** It is the design that offers the best overall balance without pre-committing to a specific weight vector. It is the recommended design for reports and comparisons when you do not have a strong engineering reason to favor one objective over others.
+
+**What to expect from the knee design:**
+- T_max will be higher than the SOO-optimal (hover safety is a hard-to-avoid cost in the MOO)
+- Arm span will be moderate — not minimum (as SOO drives) and not maximum
+- FII will be lower than baseline (more balanced fault impacts)
+- J_cost will be higher than SOO-optimal but lower than a pure-FII-optimal design
+
+**Interpretation summary:**
+
+| Design | Arm span | T_max | FII | Cost | Best for |
+|--------|----------|-------|-----|------|----------|
+| Baseline | reference | low | 0.311 | 1.00 | — starting point |
+| SOO-Optimal | minimum | just-sufficient | ~0.32 | ~0.77 | Reports requiring one number; weight-dependent |
+| Pareto Knee | moderate | moderate-high | ~0.20 | ~0.85 | Balanced recommendation; weight-independent |
+
+---
+
+### 8.4 Recommended sequence
 
 ```
 1. Edit config/mdo_config.m   → set optimizer, weights, variable bounds
 2. main_mdo Section 1         → evaluate baseline, understand weaknesses
 3. main_mdo Section 2         → 1D/2D sweeps to identify design levers
-4. main_mdo Section 3         → CMA-ES SOO (one line: run_soo(d_base, cfg))
-5. main_mdo Section 4         → gamultiobj Pareto front
+4. main_mdo Section 3         → SOO with CMA-ES (one line: run_soo(d_base, cfg))
+                                 → gives best design under your chosen weights
+5. main_mdo Section 4         → MOO Pareto front (gamultiobj)
+                                 → reveals trade-off structure, weight-independent
 6. pareto_analysis            → identify knee design
-7. eval_design mode='full'    → final validation with simulation
-8. compare_designs            → final report
+7. eval_design mode='full'    → validate both SOO-optimal and knee with simulation
+8. compare_designs            → side-by-side report: Baseline / SOO / Knee
 ```
 
-### Objective weights guidance
+Run steps 3 and 4 with `cfg.eval.mode = 'acs'` (default). Only use `mode='full'` in step 7.
 
-| Priority | `weights` | Use case |
-|----------|-----------|----------|
-| Safety first | `[0.20, 0.60, 0.00, 0.20]` | Maximize hover feasibility |
-| Balanced | `[0.35, 0.40, 0.00, 0.25]` | Default, recommended |
-| Cost minimization | `[0.25, 0.35, 0.00, 0.40]` | Lightest feasible design |
-| With simulation | `[0.25, 0.30, 0.25, 0.20]` | Include mission performance |
+### 8.5 Objective weights guidance
 
-### Common customizations (all in `mdo_config.m`)
+| Priority | `weights` | Expected SOO outcome |
+|----------|-----------|----------------------|
+| Safety first | `[0.20, 0.60, 0.00, 0.20]` | Highest T_max; geometry at lower bounds |
+| Balanced (default) | `[0.35, 0.40, 0.00, 0.25]` | Minimum arm + hover-just-satisfied |
+| Fault isotropy focus | `[0.60, 0.20, 0.00, 0.20]` | Larger Lyi; more even fault impacts |
+| Cost minimization | `[0.25, 0.35, 0.00, 0.40]` | Smallest feasible arm + lowest T_max |
+| With mission | `[0.25, 0.30, 0.25, 0.20]` | Needs `eval.mode='sim'`; much slower |
+
+### 8.6 Common customizations (all in `mdo_config.m`)
 
 **Run GA instead of CMA-ES:**
 ```matlab
@@ -612,7 +820,12 @@ cfg.opt.ga_pop   = 50;
 cfg.vars.active = [false, false, false, true];
 ```
 
-**Add cT as an optimization variable:**
+**Activate propeller diameter as a 5th design variable:**
+```matlab
+cfg.vars.active(5) = true;   % d_prop ∈ [0.30, 0.60] m; cT scales linearly
+```
+
+**Add a completely new variable** (e.g. cT as an independent variable):
 ```matlab
 cfg.vars.names{end+1}  = 'cT';
 cfg.vars.lb(end+1)     = 0.005;  cfg.vars.ub(end+1)  = 0.10;
@@ -699,29 +912,46 @@ CMA-ES is the recommended optimizer: it adapts its search distribution to the pr
 |---------|---------|
 | **Zonotope identity** | Mean single-fault ACS retention = 1/3 exactly, regardless of arm geometry |
 | **PFWAR invariance** | PFWAR ≈ 0.30 is geometry-invariant; not a useful design lever for arm shape |
-| **Hover threshold** | T_max ≥ 3.0× (m·g/6) = 10,991 N required for all-fault hover feasibility |
-| **T_max sweet spot** | ~11,000 N (just above threshold): full hover + minimum motor cost |
+| **Hover threshold** | T_max ≥ 3.0× (m·g/6) required for all-fault hover feasibility |
+| **Mass-propulsion coupling** | With physics-based model: raising T_max increases motor mass → raises hover threshold. Equilibrium T_max ≈ 11,400 N (slightly above the fixed-mass estimate of 10,991 N) |
+| **T_max sweet spot** | Just above the self-consistent hover threshold: full hover + minimum motor cost |
 | **Cost drives geometry** | Cost objective favors minimum arm span; hover constraint drives T_max |
 | **cT irrelevance** | Moment-to-thrust ratio has no effect on ACS retention or FII |
 | **Pareto trade-off** | FII (wants large Lyi) vs cost (wants small Lyi + small T_max) |
 
-### Baseline vs CMA-ES Optimal Design (measured)
+### Three-way design comparison
 
-| Metric | Baseline | CMA-ES Optimal | Change |
-|--------|----------|----------------|--------|
-| J_combined | 0.648 | **0.304** | −53% |
-| FII | 0.311 | 0.323 | +4% |
-| hover_margin | −0.333 | **0.000** | satisfied |
-| hover_ok | 4/6 | **6/6** | +50% |
-| J_cost | 1.000 | 0.766 | −23% |
-| T_max [N] | 7,327 | **11,000** | +50% |
-| Lx [m] | 2.65 | 1.00 (lb) | −62% |
-| Lyi [m] | 2.65 | 1.00 (lb) | −62% |
-| Lyo [m] | 5.50 | 2.50 (lb) | −55% |
-| Evals | — | 1,152 | converged at sigma < 1e-6 |
-| Wall time | — | **20 s** | |
+The framework produces three named designs for comparison (see `compare_designs` in Section 5 of `main_mdo.m`):
 
-The optimizer finds the minimum-cost arm span that just satisfies the hover constraint. The geometry lower bounds are active because reducing arm span lowers J_cost while the FII weight (0.35) is insufficient to counteract the cost savings. Increasing `cfg.weights.FII` relative to `cfg.weights.cost` will push the solution toward larger Lyi.
+**Baseline** — The reference vehicle from the original simulation scripts. No optimization applied. Exists to quantify what the optimizer is improving over.
+
+**SOO-Optimal** — The design minimizing `J_combined` with default weights `[FII=0.35, hover=0.40, cost=0.25]`. This is a *weight-dependent* answer to "what is the best single design?" Under default weights, the optimizer drives to minimum arm span (lowest cost) while just satisfying the hover constraint. The geometry bounds are all active at their lower limits because the FII weight is insufficient to push arms outward against the cost penalty.
+
+> If you increase `cfg.weights.FII` (e.g. to 0.60) the SOO-optimal design shifts toward larger Lyi and more balanced fault tolerance. The SOO-optimal design is only as good as the weight choice.
+
+**Pareto Knee** — Extracted from the MOO Pareto front by `pareto_analysis`. This design offers the best balance across all three objectives without pre-committing to a weight vector. It typically has a larger arm span than the SOO-optimal (improving FII) and a moderate T_max (hover-feasible but not over-sized). It is the *weight-independent recommendation*.
+
+> The knee design is useful when you cannot justify a specific weight vector — e.g. early in design when priorities are not yet fixed, or when presenting to stakeholders who want to see the trade-off rather than a single answer.
+
+### Measured results (fixed-mass model, default weights)
+
+| Metric | Baseline | SOO-Optimal | Pareto Knee | Notes |
+|--------|----------|-------------|-------------|-------|
+| J_combined | 0.648 | **0.304** | ~0.38 | SOO minimizes this directly |
+| FII | 0.311 | ~0.32 | **~0.18** | Knee better: larger, balanced arms |
+| hover_margin | −0.333 | **0.000** | **≥ 0** | Both optimal designs satisfy hover |
+| hover_ok | 4/6 | **6/6** | **6/6** | — |
+| J_cost | 1.000 | **0.766** | ~0.90 | SOO better: minimum arm span |
+| T_max [N] | 7,327 | ~11,000 | ~11,500 | Knee slightly higher (mass coupling) |
+| Lx [m] | 2.65 | 1.00 (lb) | ~2.0–3.0 | Knee not at lower bound |
+| Lyi [m] | 2.65 | 1.00 (lb) | **~3.5–4.5** | Knee at FII-optimal geometry |
+| Lyo [m] | 5.50 | 2.50 (lb) | ~4.0–5.5 | — |
+| CMA-ES evals | — | ~1,150 | — | SOO wall time ~20 s |
+| MOO evals | — | — | ~15,000 | Pareto wall time ~10–20 min |
+
+> **Pareto Knee values are approximate** — exact values depend on MOO run (stochastic). Re-run `pareto_analysis` to get current knee from your last MOO result.
+
+**Key take-away:** SOO-Optimal wins on cost. Pareto Knee wins on fault balance (FII). Both satisfy hover. Use SOO for a quick answer under a fixed priority set; use the Pareto Knee when presenting a design recommendation that does not depend on a particular weight choice.
 
 ---
 

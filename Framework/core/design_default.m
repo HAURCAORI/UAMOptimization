@@ -24,14 +24,27 @@ function d = design_default()
 %   (Spin signs → yaw row of B: [-cT, -cT, +cT, +cT, -cT, +cT])
 %
 %   Reference: AE50001 Team5 baseline, 2026.
+%
+%   VEHICLE MODEL FLAG
+%   ------------------
+%   When d.m_payload is present, hexacopter_params.m activates the
+%   physics-based vehicle_model.m (Delbecq 2020 scaling laws): motor mass
+%   and frame mass are computed from design variables, making total mass a
+%   derived quantity.  d.m is retained for backward compatibility but is
+%   overridden by the computed value when the vehicle model is active.
 
-d.Lx    = 2.65;    % [m]  fore/aft arm
-d.Lyi   = 2.65;    % [m]  inner lateral arm (front/rear)
-d.Lyo   = 5.50;    % [m]  outer lateral arm (middle)
-d.m     = 2240.73; % [kg] total vehicle mass
-d.cT    = 0.03;    % [-]  moment-to-thrust ratio
+d.Lx      = 2.65;    % [m]  fore/aft arm
+d.Lyi     = 2.65;    % [m]  inner lateral arm (front/rear)
+d.Lyo     = 5.50;    % [m]  outer lateral arm (middle)
+d.cT      = 0.03;    % [-]  moment-to-thrust ratio
 
-% T_max: 2x hover thrust margin, split equally across 6 motors
+% Vehicle model activation: set m_payload to enable physics-based mass
+d.m_payload = 1500.0;  % [kg] fixed UAM payload budget
+
+% T_max: 2× hover thrust margin at reference total mass (2240.73 kg)
 g       = 9.81;
-d.T_max = d.m * 2.0 / 6.0 * g;  % ≈ 7304 N per motor
+d.T_max = 2240.73 * 2.0 / 6.0 * g;  % ≈ 7327 N per motor
+
+% Legacy field: total mass (approximate; vehicle_model computes exact value)
+d.m = 2240.73;  % [kg] — overridden by vehicle_model when m_payload is set
 end

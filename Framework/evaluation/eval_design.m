@@ -65,38 +65,46 @@ if ~isfield(options.sim_config,'loe_vec')
     options.sim_config.loe_vec = options.loe_for_sim;
 end
 
-% ── Build physical model (needed for cost metrics) ─────────────────────────
+% ── Build physical model (needed for mass, inertia, cost metrics) ──────────
 [UAM, Prop, Env] = hexacopter_params(d);
 
 % ── Feasibility pre-check ─────────────────────────────────────────────────
 hover_min_Tmax = UAM.m * Env.g / 6 * 1.05;   % need at least 1.05x hover per motor
+cT_val  = Prop.cT;
 geo_ok  = (d.Lx > 0.5) && (d.Lyi > 0.5) && (d.Lyo > d.Lyi + 0.1) && ...
-          (d.cT > 0) && (d.T_max > hover_min_Tmax);
+          (cT_val > 0) && (d.T_max > hover_min_Tmax);
 feasible = geo_ok;
 
-% ── ACS evaluation ────────────────────────────────────────────────────────
+% ── ACS evaluation (Stage 1) ──────────────────────────────────────────────
 if ismember(options.mode, {'acs','full'})
     acs = eval_acs(d, options.fault_config);
 else
     acs = [];
 end
 
-% ── Simulation evaluation ─────────────────────────────────────────────────
+% ── Simulation evaluation (Stage 2) ───────────────────────────────────────
 if ismember(options.mode, {'sim','full'})
     sim = eval_simulation(d, options.sim_config);
 else
     sim = [];
 end
 
-% ── Structural / motor cost metric ────────────────────────────────────────
-d_base       = design_default();
-arm_span     = 2*d.Lx + 2*d.Lyi + 2*d.Lyo;           % total arm span [m]
-arm_span_base= 2*d_base.Lx + 2*d_base.Lyi + 2*d_base.Lyo;
-J_struct     = arm_span / arm_span_base;               % structural mass proxy
-
-% Motor cost: scales as T_max^1.5 (empirical for UAM propulsion systems)
-J_motor      = (d.T_max / d_base.T_max)^1.5;
-J_cost       = J_struct * J_motor;                     % combined cost index
+% ── Cost metric ───────────────────────────────────────────────────────────
+if isfield(UAM, 'model')
+    % Physics-based cost: actual computed motor + frame mass (vehicle_model path)
+    mdl    = UAM.model;
+    J_cost = mdl.cost_total / mdl.cost_ref;   % normalized to baseline
+    J_struct = mdl.m_frame / (mdl.cost_ref);  % frame share (for verbose)
+    J_motor  = mdl.cost_motor / mdl.cost_ref; % motor share (for verbose)
+else
+    % Legacy cost: geometric proxy
+    d_base       = design_default();
+    arm_span     = 2*d.Lx + 2*d.Lyi + 2*d.Lyo;
+    arm_span_base= 2*d_base.Lx + 2*d_base.Lyi + 2*d_base.Lyo;
+    J_struct     = arm_span / arm_span_base;
+    J_motor      = (d.T_max / d_base.T_max)^1.5;
+    J_cost       = J_struct * J_motor;
+end
 
 % ── Scalar objectives ─────────────────────────────────────────────────────
 w = options.weights;
@@ -159,12 +167,12 @@ result.d           = d;
 if options.verbose
     fprintf('\n=== Design Evaluation Summary ===\n');
     fprintf('  Lx=%.2fm  Lyi=%.2fm  Lyo=%.2fm  T_max=%.0fN  cT=%.4f  m=%.0fkg\n', ...
-            d.Lx, d.Lyi, d.Lyo, d.T_max, d.cT, d.m);
+            d.Lx, d.Lyi, d.Lyo, d.T_max, Prop.cT, UAM.m);
     if ~isnan(J_FII)
         fprintf('  FII           = %.4f  (J_FII=%.4f)\n', acs.FII, J_FII);
         fprintf('  WCFR          = %.4f\n', acs.WCFR);
         fprintf('  hover_margin  = %.4f  (J_hover=%.4f)\n', acs.hover_margin, J_hover);
-        fprintf('  T_hover_worst = %.0f N  (ratio=%.2fx)\n', acs.T_hover_worst, acs.T_hover_worst/(d.m*9.81/6));
+        fprintf('  T_hover_worst = %.0f N  (ratio=%.2fx)\n', acs.T_hover_worst, acs.T_hover_worst/(UAM.m*9.81/6));
         fprintf('  Hover ok      = %d/6\n', sum(acs.hover_ok_single));
         fprintf('  PFWAR         = %.4f\n', acs.PFWAR);
     end

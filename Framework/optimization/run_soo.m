@@ -336,8 +336,8 @@ function cfg = build_cfg_from_options(d_init, options)
         if isfield(options, 'lb'), cfg.vars.lb = options.lb(:)'; end
         if isfield(options, 'ub'), cfg.vars.ub = options.ub(:)'; end
         % units: fill with '' for any unrecognised names
-        known_units = containers.Map({'Lx','Lyi','Lyo','T_max','cT','m'}, ...
-                                     {'m',  'm',  'm',  'N',   '-', 'kg'});
+        known_units = containers.Map({'Lx','Lyi','Lyo','T_max','cT','m','d_prop','m_payload'}, ...
+                                     {'m',  'm',  'm',  'N',   '-', 'kg', 'm', 'kg'});
         units = cell(1, n);
         for k = 1:n
             if isKey(known_units, options.var_names{k})

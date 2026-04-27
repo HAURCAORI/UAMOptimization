@@ -29,19 +29,23 @@ cfg.weights.mission = 0.00;   % Mission tracking RMSE (needs eval.mode='sim'/'fu
 cfg.weights.cost    = 0.25;   % Motor + structural cost index
 
 %% ── DESIGN VARIABLES ──────────────────────────────────────────────────────
-% Each column: one design variable
+% Each column: one design variable.
 %   names  : field name in the design struct d (must match design_default.m)
 %   lb/ub  : lower/upper bounds in physical units
 %   x0     : initial/baseline value (used for normalization and warm-start)
 %   units  : string label for reporting
 %   active : if false, variable is frozen at x0 during optimization
 %
-cfg.vars.names  = {'Lx',  'Lyi', 'Lyo', 'T_max'};
-cfg.vars.lb     = [ 1.0,   1.0,   2.5,   8000  ];
-cfg.vars.ub     = [ 5.0,   5.0,   9.0,  16000  ];
-cfg.vars.x0     = [ 2.65,  2.65,  5.50,  7327  ];  % baseline design
-cfg.vars.units  = {'m',   'm',   'm',   'N'   };
-cfg.vars.active = [true,  true,  true,  true  ];    % all active
+% EXTENSIBILITY: to add a new design variable, append one entry to each row.
+% Example — activate propeller diameter as a design variable:
+%   Set cfg.vars.active(5) = true;
+%
+cfg.vars.names  = {'Lx',  'Lyi', 'Lyo', 'T_max', 'd_prop'};
+cfg.vars.lb     = [ 1.0,   1.0,   2.5,   8000,    0.30   ];
+cfg.vars.ub     = [ 5.0,   5.0,   9.0,  16000,    0.60   ];
+cfg.vars.x0     = [ 2.65,  2.65,  5.50,  7327,    0.40   ];  % baseline
+cfg.vars.units  = {'m',   'm',   'm',   'N',     'm'    };
+cfg.vars.active = [true,  true,  true,  true,    false  ];  % d_prop frozen
 
 %% ── OPTIMIZER SETTINGS ────────────────────────────────────────────────────
 cfg.opt.method     = 'cmaes';   % 'cmaes' | 'ga' | 'fmincon' | 'patternsearch'
@@ -62,10 +66,33 @@ cfg.opt.use_polish = true;      % run fmincon SQP polish after global search
 cfg.opt.verbose    = true;      % print per-generation progress
 cfg.opt.plot_live  = true;      % show live convergence figure
 
+%% ── VEHICLE MODEL ─────────────────────────────────────────────────────────
+% Physics-based parameterized vehicle model (Delbecq 2020 scaling laws).
+% When active, motor mass and frame mass are derived from design variables,
+% making total vehicle mass a self-consistent computed quantity.
+%
+% This is the novel DATCOM-like contribution: larger T_max → heavier motors
+% → heavier vehicle → higher hover threshold (self-consistent coupling).
+%
+% Deactivate only for legacy fixed-mass testing:
+cfg.model.use_vehicle_model = true;   % true: physics-based mass; false: fixed d.m
+
+%% ── TWO-STAGE EVALUATION ──────────────────────────────────────────────────
+% Stage 1 (eval_stage1): ACS feasibility + hover screening (~15 ms/eval)
+%   - Used during optimization (fast path)
+%   - Computes: FII, WCFR, PFWAR, hover_margin
+%
+% Stage 2 (eval_stage2): Mission simulation (~200–500 ms/eval)
+%   - Called only for designs passing Stage 1 (for validation)
+%   - Computes: alt_rmse, attitude excursion, recovery_time
+%
+cfg.stage.run_stage2_in_opt = false;  % set true to include mission in optimization
+%                                      % (much slower, ~30× cost per eval)
+
 %% ── EVALUATION MODE ───────────────────────────────────────────────────────
-cfg.eval.mode = 'acs';  % 'acs'  : ACS/FCR metrics only (~15 ms/eval) — use for optimization
-%                        % 'sim'  : closed-loop simulation metrics only
-%                        % 'full' : both ACS + simulation (for final validation)
+cfg.eval.mode = 'acs';  % 'acs'  : Stage 1 only (~15 ms/eval) — use for optimization
+%                        % 'sim'  : Stage 2 simulation only
+%                        % 'full' : Stage 1 + Stage 2 (for final validation)
 
 %% ── FAULT CONFIGURATION ───────────────────────────────────────────────────
 cfg.fault.include_double = false;  % include double-motor faults in ACS (slower)
