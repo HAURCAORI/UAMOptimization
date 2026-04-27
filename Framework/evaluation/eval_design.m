@@ -101,9 +101,6 @@ result.J_mission = J_mission;
 result.J_cost = J_cost;
 result.J_struct = J_struct;
 result.J_motor = J_motor;
-result.J_fault = J_hover;
-result.J_isotropy = J_FII;
-result.J_mass = J_struct;
 result.acs = acs;
 result.sim = sim;
 result.d = d_eval;
@@ -147,19 +144,9 @@ if options.verbose
 end
 end
 
-function objective_cfg = default_objective_config(options)
-if isfield(options, 'weights')
-    objective_cfg.names = {'FII', 'hover', 'mission', 'cost'};
-    if isstruct(options.weights)
-        ws = options.weights;
-        objective_cfg.weights = [ws.FII, ws.hover, ws.mission, ws.cost];
-    else
-        objective_cfg.weights = options.weights(:)';
-    end
-else
-    objective_cfg.names = {'FII', 'hover', 'cost'};
-    objective_cfg.weights = [0.35, 0.40, 0.25];
-end
+function objective_cfg = default_objective_config(~)
+objective_cfg.names = {'FII', 'hover', 'cost'};
+objective_cfg.weights = [0.35, 0.40, 0.25];
 end
 
 function [J_combined, objective_vector, objective_names, objective_weights] = ...

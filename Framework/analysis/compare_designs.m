@@ -9,7 +9,7 @@ function compare_designs(designs, labels, options)
 %   Design parameters:  Lx, Lyi, Lyo, T_max, cT
 %   ACS metrics:        vol_nominal, PFWAR, FII, WCFR, hover_ok_rate
 %   Simulation metrics: alt_rmse, recovery_time, max_att, ctrl_effort
-%   Objectives:         J_fault, J_isotropy, J_mission, J_cost, J_combined
+%   Objectives:         J_FII, J_hover, J_mission, J_cost, J_combined
 %
 %   Inputs:
 %     designs  - {N×1} cell array of design structs
@@ -137,7 +137,7 @@ if ismember(options.eval_mode, {'sim','full'})
 end
 
 % Objectives
-obj_rows = {'J_fault','J_isotropy','J_mission','J_cost','J_combined'};
+obj_rows = {'J_FII','J_hover','J_mission','J_cost','J_combined'};
 for pi = 1:numel(obj_rows)
     fprintf('%-20s', sprintf('  %s', obj_rows{pi}));
     for k = 1:N

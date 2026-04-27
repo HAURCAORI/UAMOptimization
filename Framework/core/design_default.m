@@ -25,13 +25,11 @@ function d = design_default()
 %
 %   Reference: AE50001 Team5 baseline, 2026.
 %
-%   VEHICLE MODEL FLAG
-%   ------------------
-%   When d.m_payload is present, hexacopter_params.m activates the
-%   physics-based vehicle_model.m (Delbecq 2020 scaling laws): motor mass
-%   and frame mass are computed from design variables, making total mass a
-%   derived quantity.  d.m is retained for backward compatibility but is
-%   overridden by the computed value when the vehicle model is active.
+%   VEHICLE MODEL
+%   -------------
+%   d.use_vehicle_model = true activates physics-based mass via vehicle_model.m
+%   (Delbecq 2020 scaling laws).  d.m is an approximate initial value used
+%   only when the vehicle model is disabled (cfg.model.use_vehicle_model=false).
 
 d.Lx      = 2.65;    % [m]  fore/aft arm
 d.Lyi     = 2.65;    % [m]  inner lateral arm (front/rear)
@@ -47,6 +45,5 @@ d.use_vehicle_model = true;
 g       = 9.81;
 d.T_max = 2240.73 * 2.0 / 6.0 * g;  % ≈ 7327 N per motor
 
-% Legacy field: total mass (approximate; vehicle_model computes exact value)
-d.m = 2240.73;  % [kg] — overridden by vehicle_model when m_payload is set
+d.m = 2240.73;  % [kg] approximate; vehicle_model overrides when use_vehicle_model=true
 end

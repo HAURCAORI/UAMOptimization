@@ -31,9 +31,9 @@ function [UAM, Prop, Env] = hexacopter_params(d)
 %
 %   Inputs:
 %     d   - Design struct (see design_default.m)
-%           When d.m_payload is present, activates physics-based
-%           vehicle_model.m (Delbecq 2020 scaling).  Otherwise uses the
-%           legacy fixed-mass path for backward compatibility.
+%           When d.use_vehicle_model=true, activates physics-based
+%           vehicle_model.m (Delbecq 2020 scaling).  When false, uses
+%           fixed mass from d.m with calibrated effective motor masses.
 %
 %   Outputs:
 %     UAM   - Vehicle struct
@@ -44,13 +44,8 @@ function [UAM, Prop, Env] = hexacopter_params(d)
 Env.g   = 9.81;    % [m/s²]
 Env.rho = 1.225;   % [kg/m³]
 
-% ── Dispatch: physics-based model vs legacy fixed-mass path ──────────────
-use_vehicle_model = false;
-if isfield(d, 'use_vehicle_model')
-    use_vehicle_model = logical(d.use_vehicle_model);
-elseif isfield(d, 'm_payload')
-    use_vehicle_model = true;
-end
+% ── Dispatch: physics-based model vs fixed-mass path ─────────────────────
+use_vehicle_model = isfield(d, 'use_vehicle_model') && logical(d.use_vehicle_model);
 
 if use_vehicle_model
     % ── Physics-based vehicle model (DATCOM-style scaling laws) ──────────
@@ -72,7 +67,7 @@ if use_vehicle_model
     Prop.tau   = 0.04;
 
 else
-    % ── Legacy path (fixed mass, calibrated effective motor masses) ───────
+    % ── Fixed-mass path (calibrated effective motor masses) ───────────────
     Lx_b  = 2.65;   Lyi_b = 2.65;   Lyo_b = 5.50;
     Ix_b  = 12000;  Iy_b  = 9400;
 

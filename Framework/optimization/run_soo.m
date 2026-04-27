@@ -1,4 +1,4 @@
-function [d_opt, J_opt, history] = run_soo(d_init, options)
+function [d_opt, J_opt, history] = run_soo(d_init, cfg)
 % RUN_SOO  Single-Objective Optimization of hexacopter fault-tolerant design.
 %
 %   PROBLEM
@@ -7,12 +7,12 @@ function [d_opt, J_opt, history] = run_soo(d_init, options)
 %   Subject to: Physical feasibility constraints (see constraint_fcn.m)
 %               Box bounds on selected design variables
 %
-%   METHODS
+%   METHODS (cfg.opt.method)
 %   -------
 %   'ga'          Genetic Algorithm – global, gradient-free. Default choice.
 %                 Handles discontinuous hover-feasibility threshold.
+%   'cmaes'       CMA-ES – routed to run_cmaes.m (normalized variable space).
 %   'fmincon'     Sequential Quadratic Programming – fast local polish.
-%                 Use after GA to tighten the result.
 %   'patternsearch' Pattern Search – gradient-free local method.
 %
 %   VISUAL PROGRESS
@@ -20,22 +20,11 @@ function [d_opt, J_opt, history] = run_soo(d_init, options)
 %   A live figure is maintained during the run showing:
 %     • Convergence of the best objective value per generation / iteration
 %     • Current best design variable values (bar chart)
-%     • FII, hover_margin, J_cost per generation
+%     • Objective metrics at the best design
 %
 %   Inputs:
 %     d_init  - Initial design struct (see design_default.m)
-%     options - (optional) struct with fields:
-%       .method      : 'ga' | 'fmincon' | 'patternsearch'  (default: 'ga')
-%       .var_names   : {Nvar×1} fields of d to optimize
-%                      default: {'Lx','Lyi','Lyo','T_max'}
-%       .lb          : [Nvar×1] lower bounds
-%       .ub          : [Nvar×1] upper bounds
-%       .eval_mode   : 'acs'|'sim'|'full'  passed to eval_design (default:'acs')
-%       .objectives  : struct with .names and .weights for eval_design
-%       .max_iter    : max generations (GA) or iterations  (default: 80)
-%       .pop_size    : GA population size                  (default: 50)
-%       .plot_live   : show live convergence figure        (default: true)
-%       .verbose     : print per-generation summary        (default: true)
+%     cfg     - mdo_config struct (from mdo_config.m)
 %
 %   Outputs:
 %     d_opt   - Optimal design struct
@@ -46,52 +35,21 @@ function [d_opt, J_opt, history] = run_soo(d_init, options)
 %                 .x_best  : design vars at best J
 %                 .n_evals : total function evaluations
 
-% ── Accept cfg struct (from mdo_config) OR legacy options struct ───────────
-if nargin < 2, options = struct(); end
-
-% Detect if second arg is a full mdo_config struct
-if isstruct(options) && isfield(options, 'vars') && isfield(options, 'opt')
-    cfg     = options;
-    options = cfg_to_soo_options(cfg);
-end
-
-% ── Defaults (legacy path) ────────────────────────────────────────────────
-if ~isfield(options,'method'),    options.method    = 'ga';              end
-if ~isfield(options,'var_names'), options.var_names = {'Lx','Lyi','Lyo','T_max'}; end
-if ~isfield(options,'eval_mode'), options.eval_mode = 'acs';             end
-if ~isfield(options,'objectives')
-    options.objectives.names = {'FII','hover','cost'};
-    options.objectives.weights = [0.35,0.40,0.25];
-end
-if ~isfield(options,'max_iter'),  options.max_iter  = 80;                end
-if ~isfield(options,'pop_size'),  options.pop_size  = 50;                end
-if ~isfield(options,'plot_live'), options.plot_live = true;              end
-if ~isfield(options,'verbose'),   options.verbose   = true;              end
+if nargin < 2, cfg = mdo_config(); end
 
 % ── Route CMA-ES to dedicated runner ─────────────────────────────────────
-if strcmpi(options.method, 'cmaes')
-    if exist('cfg','var')
-        [d_opt, J_opt, history] = run_cmaes(d_init, cfg);
-    else
-        % Build minimal cfg from options struct
-        cfg_tmp = build_cfg_from_options(d_init, options);
-        [d_opt, J_opt, history] = run_cmaes(d_init, cfg_tmp);
-    end
+if strcmpi(cfg.opt.method, 'cmaes')
+    [d_opt, J_opt, history] = run_cmaes(d_init, cfg);
     return;
 end
+
+options = soo_params_from_cfg(cfg);
 
 var_names = options.var_names;
 Nvar      = numel(var_names);
 
-% ── Variable bounds ────────────────────────────────────────────────────────
-defaults_lb = struct('Lx',1.0,'Lyi',1.0,'Lyo',2.5,'T_max',8000,'cT',0.005,'m',d_init.m);
-defaults_ub = struct('Lx',5.0,'Lyi',5.0,'Lyo',9.0,'T_max',16000,'cT',0.10,'m',d_init.m);
-
-lb = zeros(Nvar,1);  ub = zeros(Nvar,1);
-for k = 1:Nvar
-    lb(k) = getfield_safe(options,'lb',k, defaults_lb.(var_names{k}));
-    ub(k) = getfield_safe(options,'ub',k, defaults_ub.(var_names{k}));
-end
+lb = options.lb(:);
+ub = options.ub(:);
 
 % Initial point from d_init
 x0 = zeros(Nvar,1);
@@ -201,7 +159,7 @@ function J_out = tracked_obj(x)
 end
 
 % ── Run optimizer ─────────────────────────────────────────────────────────
-con_fun = @(x) constraint_fcn(x, var_names, d_init);
+con_fun = @(x) constraint_fcn(x, cfg, d_init);
 
 if options.verbose
     fprintf('\n%s\n', repmat('=',1,65));
@@ -301,17 +259,8 @@ function [state, opts_out, changed] = ga_progress_fcn(options_in, state, flag)
 end
 end
 
-% ── Utility: safe field access with default ────────────────────────────────
-function v = getfield_safe(s, fname, idx, default)
-    if isfield(s, fname) && numel(s.(fname)) >= idx
-        v = s.(fname)(idx);
-    else
-        v = default;
-    end
-end
-
-% ── Convert mdo_config struct → legacy run_soo options struct ──────────────
-function options = cfg_to_soo_options(cfg)
+% ── Extract GA/fmincon/patternsearch parameters from mdo_config ────────────
+function options = soo_params_from_cfg(cfg)
     active = cfg.vars.active;
     options.method    = cfg.opt.method;
     options.var_names = cfg.vars.names(active);
@@ -333,63 +282,3 @@ function options = cfg_to_soo_options(cfg)
     end
 end
 
-% ── Build minimal mdo_config from a legacy options struct ──────────────────
-function cfg = build_cfg_from_options(d_init, options)
-    cfg = mdo_config();  % start from defaults
-
-    % Override variable registry
-    if isfield(options, 'var_names')
-        n = numel(options.var_names);
-        cfg.vars.names  = options.var_names;
-        cfg.vars.active = true(1, n);
-        % Rebuild x0 from d_init
-        x0 = zeros(1, n);
-        for k = 1:n
-            if isfield(d_init, options.var_names{k})
-                x0(k) = d_init.(options.var_names{k});
-            end
-        end
-        cfg.vars.x0 = x0;
-        if isfield(options, 'lb'), cfg.vars.lb = options.lb(:)'; end
-        if isfield(options, 'ub'), cfg.vars.ub = options.ub(:)'; end
-        % units: fill with '' for any unrecognised names
-        known_units = containers.Map({'Lx','Lyi','Lyo','T_max','cT','m','d_prop','m_payload'}, ...
-                                     {'m',  'm',  'm',  'N',   '-', 'kg', 'm', 'kg'});
-        units = cell(1, n);
-        for k = 1:n
-            if isKey(known_units, options.var_names{k})
-                units{k} = known_units(options.var_names{k});
-            else
-                units{k} = '';
-            end
-        end
-        cfg.vars.units = units;
-    end
-
-    % Override optimizer settings
-    if isfield(options, 'max_iter'),  cfg.opt.max_iter  = options.max_iter;  end
-    if isfield(options, 'pop_size'),  cfg.opt.ga_pop    = options.pop_size;  end
-    if isfield(options, 'plot_live'), cfg.opt.plot_live = options.plot_live; end
-    if isfield(options, 'verbose'),   cfg.opt.verbose   = options.verbose;   end
-
-    % Derive CMA-ES budget from max_iter × pop_size (mirrors GA effort)
-    cfg.opt.max_evals = cfg.opt.max_iter * max(cfg.opt.ga_pop, 10);
-
-    % Override weights
-    if isfield(options, 'objectives')
-        cfg.objectives.stage1 = options.objectives;
-        cfg.weights.FII = 0;
-        cfg.weights.hover = 0;
-        cfg.weights.mission = 0;
-        cfg.weights.cost = 0;
-        for k = 1:numel(options.objectives.names)
-            name_k = options.objectives.names{k};
-            if isfield(cfg.weights, name_k)
-                cfg.weights.(name_k) = options.objectives.weights(k);
-            end
-        end
-    end
-
-    % Override eval mode
-    if isfield(options, 'eval_mode'), cfg.eval.mode = options.eval_mode; end
-end

@@ -1,18 +1,10 @@
-function [c, ceq] = constraint_fcn(x, cfg_or_names, d_fixed)
+function [c, ceq] = constraint_fcn(x, cfg, d_fixed)
 % CONSTRAINT_FCN  Nonlinear constraints for fmincon / ga.
 %
-% Two calling conventions:
-%
-%   NEW (cfg-based):
-%     [c, ceq] = constraint_fcn(x_phys, cfg, d_fixed)
-%       x_phys : physical design variable vector (active vars only)
-%       cfg    : mdo_config struct (active vars extracted automatically)
-%
-%   LEGACY (backward compatible):
-%     [c, ceq] = constraint_fcn(x_phys, param_names, d_fixed)
-%       x_phys     : physical design variable vector
-%       param_names: cell array of field names  {'Lx','Lyi',...}
-%       d_fixed    : base design struct
+%   [c, ceq] = constraint_fcn(x_phys, cfg, d_fixed)
+%     x_phys : physical design variable vector (active vars only)
+%     cfg    : mdo_config struct
+%     d_fixed: base design struct
 %
 % CONSTRAINTS (c ≤ 0 = feasible)
 %   c(1): Hover margin ≥ 10%  →  1.10*m*g - 6*T_max ≤ 0
@@ -22,14 +14,7 @@ function [c, ceq] = constraint_fcn(x, cfg_or_names, d_fixed)
 
 ceq = [];
 
-%% ── Detect calling convention ────────────────────────────────────────────
-if isstruct(cfg_or_names) && isfield(cfg_or_names, 'vars')
-    cfg    = cfg_or_names;
-    active = cfg.vars.active;
-    names  = cfg.vars.names(active);
-else
-    names = cfg_or_names;
-end
+names = cfg.vars.names(cfg.vars.active);
 
 %% ── Map x into design struct ────────────────────────────────────────────
 d = d_fixed;
@@ -40,7 +25,7 @@ end
 g = 9.81;
 c = zeros(4, 1);
 
-% Build physical model once (vehicle_model path or legacy, depending on d)
+% Build physical model
 [UAM, Prop, ~] = hexacopter_params(d);
 m_total = UAM.m;
 B_mat   = UAM.B;

@@ -31,12 +31,6 @@ cfg.objectives.stage1.moo_names = {'FII', 'hover', 'cost'};
 % Stage 2 objective registry is reserved for later mission/control work.
 cfg.objectives.stage2.names     = {'mission'};
 cfg.objectives.stage2.weights   = 1.0;
-%
-% Legacy weight struct kept for compatibility with older scripts.
-cfg.weights.FII     = 0.35;   % Fault Isotropy Index: std(r_i)/mean(r_i)
-cfg.weights.hover   = 0.40;   % Hover safety penalty (0 when T_max ≥ 3× threshold)
-cfg.weights.mission = 0.00;   % Mission tracking RMSE (needs eval.mode='sim'/'full')
-cfg.weights.cost    = 0.25;   % Motor + structural cost index
 
 %% ── DESIGN VARIABLES ──────────────────────────────────────────────────────
 % Each column: one design variable.
@@ -84,7 +78,6 @@ cfg.opt.plot_live  = false;      % show live convergence figure
 % This is the novel DATCOM-like contribution: larger T_max → heavier motors
 % → heavier vehicle → higher hover threshold (self-consistent coupling).
 %
-% Deactivate only for legacy fixed-mass testing:
 cfg.model.use_vehicle_model = true;   % true: physics-based mass; false: fixed d.m
 
 %% ── TWO-STAGE EVALUATION ──────────────────────────────────────────────────
@@ -96,9 +89,6 @@ cfg.model.use_vehicle_model = true;   % true: physics-based mass; false: fixed d
 %   - Called only for designs passing Stage 1 (for validation)
 %   - Computes: alt_rmse, attitude excursion, recovery_time
 %
-cfg.stage.run_stage2_in_opt = false;  % set true to include mission in optimization
-%                                      % (much slower, ~30× cost per eval)
-
 %% ── EVALUATION MODE ───────────────────────────────────────────────────────
 cfg.eval.mode = 'acs';  % 'acs'  : Stage 1 only (~15 ms/eval) — use for optimization
 %                        % 'sim'  : Stage 2 simulation only
