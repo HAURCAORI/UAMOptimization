@@ -58,7 +58,15 @@ units  = {'m',  'm',  'm',  'N',    '-', 'kg'};
 for pi = 1:numel(params)
     fprintf('%-20s', sprintf('  d.%s [%s]', params{pi}, units{pi}));
     for k = 1:N
-        val = designs{k}.(params{pi});
+        if strcmp(params{pi}, 'cT')
+            [~, Prop_k] = hexacopter_params(designs{k});
+            val = Prop_k.cT;
+        elseif strcmp(params{pi}, 'm')
+            [UAM_k, ~] = hexacopter_params(designs{k});
+            val = UAM_k.m;
+        else
+            val = designs{k}.(params{pi});
+        end
         fprintf('  %-14.3f', val);
     end
     fprintf('\n');
@@ -156,7 +164,7 @@ for k = 1:N
     raw(k,2) = 1 - (isempty(r.acs)*1 + ~isempty(r.acs)*r.acs.FII);
     raw(k,3) = isempty(r.acs)*0 + ~isempty(r.acs) * r.acs.WCFR;
     raw(k,4) = isempty(r.acs)*0 + ~isempty(r.acs) * mean(double(r.acs.hover_ok_single));
-    J_c = r.J_mass * r.J_motor;  raw(k,5) = 1 - min(J_c, 2)/2;
+    raw(k,5) = 1 - min(r.J_cost, 2)/2;
 end
 
 % Normalize to [0,1] across designs

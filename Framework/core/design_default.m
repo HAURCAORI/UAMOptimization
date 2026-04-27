@@ -37,9 +37,11 @@ d.Lx      = 2.65;    % [m]  fore/aft arm
 d.Lyi     = 2.65;    % [m]  inner lateral arm (front/rear)
 d.Lyo     = 5.50;    % [m]  outer lateral arm (middle)
 d.cT      = 0.03;    % [-]  moment-to-thrust ratio
+d.d_prop  = 0.40;    % [m]  reference propeller diameter
 
 % Vehicle model activation: set m_payload to enable physics-based mass
 d.m_payload = 1500.0;  % [kg] fixed UAM payload budget
+d.use_vehicle_model = true;
 
 % T_max: 2× hover thrust margin at reference total mass (2240.73 kg)
 g       = 9.81;

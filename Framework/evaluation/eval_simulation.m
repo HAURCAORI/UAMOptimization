@@ -199,15 +199,28 @@ if sum(idx_pf) > 5
     ctrl_effort = sqrt(mean(T_pf(:).^2)) / Prop.T_max;
 
     % Recovery time: first time after fault that attitude stays within ±5 deg
-    ATT_BAND = 5;   % [deg]
+    ATT_BAND = 5;      % [deg]
+    HOLD_SEC = 0.5;    % [s]
+    hold_n   = max(1, ceil(HOLD_SEC / dt));
     in_band  = (abs(phi_deg) < ATT_BAND) & (abs(theta_deg) < ATT_BAND);
     t_pf     = t_vec(idx_pf);
-    if all(in_band)
+    left_band_idx = find(~in_band, 1, 'first');
+    if isempty(left_band_idx)
         recovery_time = 0;
-    elseif any(in_band)
-        recovery_time = t_pf(find(in_band,1,'first')) - t_fault;
     else
-        recovery_time = t_end - t_fault;   % never recovered
+        recovery_idx = [];
+        last_start = numel(in_band) - hold_n + 1;
+        for kk = left_band_idx+1:last_start
+            if all(in_band(kk:kk+hold_n-1))
+                recovery_idx = kk;
+                break;
+            end
+        end
+        if isempty(recovery_idx)
+            recovery_time = t_end - t_fault;
+        else
+            recovery_time = t_pf(recovery_idx) - t_fault;
+        end
     end
 else
     % Immediate divergence
@@ -239,4 +252,5 @@ metrics.diverged       = diverged;
 metrics.t_vec          = t_vec;
 metrics.X_hist         = X_hist;
 metrics.T_hist         = T_hist;
+metrics.t_fault        = t_fault;
 end

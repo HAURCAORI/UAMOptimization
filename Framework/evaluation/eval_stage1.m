@@ -63,7 +63,7 @@ end
 %   (b) Geometry is non-degenerate (Lyo > Lyi + 0.1 m)
 geo_ok     = (d.Lx > 0.5) && (d.Lyi > 0.5) && (d.Lyo > d.Lyi + 0.1);
 wcfr_ok    = (acs.WCFR >= 0.05);
-feasible   = geo_ok && wcfr_ok;
+feasible   = geo_ok && wcfr_ok && hover_ok_all;
 
 % ── Pack result ───────────────────────────────────────────────────────────
 result.feasible      = feasible;

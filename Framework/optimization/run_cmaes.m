@@ -95,6 +95,12 @@ last_best_eval = 0;
 eval_opts.mode    = cfg.eval.mode;
 eval_opts.weights = weights_struct_to_vec(cfg.weights);
 eval_opts.verbose = false;
+if isfield(cfg, 'model')
+    eval_opts.model = cfg.model;
+    if isfield(cfg.model, 'use_vehicle_model')
+        d_init.use_vehicle_model = logical(cfg.model.use_vehicle_model);
+    end
+end
 
 % Fault config
 fault_cfg.include_double = cfg.fault.include_double;

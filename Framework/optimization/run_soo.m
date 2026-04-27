@@ -101,6 +101,12 @@ end
 eval_opts.mode    = options.eval_mode;
 eval_opts.weights = options.weights;
 eval_opts.verbose = false;
+if isfield(options,'model')
+    eval_opts.model = options.model;
+    if isfield(options.model,'use_vehicle_model')
+        d_init.use_vehicle_model = logical(options.model.use_vehicle_model);
+    end
+end
 
 % ── History tracking ──────────────────────────────────────────────────────
 history.J_best  = [];
@@ -314,6 +320,9 @@ function options = cfg_to_soo_options(cfg)
     options.pop_size  = cfg.opt.ga_pop;
     options.plot_live = cfg.opt.plot_live;
     options.verbose   = cfg.opt.verbose;
+    if isfield(cfg, 'model')
+        options.model = cfg.model;
+    end
 end
 
 % ── Build minimal mdo_config from a legacy options struct ──────────────────

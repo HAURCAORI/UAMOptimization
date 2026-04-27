@@ -50,7 +50,8 @@ function model = vehicle_model(d)
 g           = 9.81;
 
 % Mass model
-m_payload   = 1500.0;     % [kg]  fixed payload budget
+m_payload_default = 1500.0;  % [kg] fallback payload budget
+m_payload_ref = m_payload_default;
 T_max_ref   = 7327.0;     % [N]   reference motor T_max
 M_mot_ref   = 74.07;      % [kg]  motor mass at T_max_ref (Delbecq 2020)
 k_mot_exp   = 3/3.5;      % [-]   motor mass scaling exponent
@@ -59,7 +60,7 @@ k_mot_exp   = 3/3.5;      % [-]   motor mass scaling exponent
 Lx_b    = 2.65;  Lyi_b = 2.65;  Lyo_b = 5.50;   % [m] baseline arms
 arm_span_ref = 2*Lx_b + 2*Lyi_b + 2*Lyo_b;       % = 21.6 m
 m_total_ref  = 2240.73;                            % [kg] reference total mass
-M_frame_ref  = m_total_ref - m_payload - 6*M_mot_ref;  % = 296.31 kg
+M_frame_ref  = m_total_ref - m_payload_ref - 6*M_mot_ref;  % = 296.31 kg
 k_frame      = M_frame_ref / arm_span_ref;         % ≈ 13.72 kg/m
 
 % Body inertia residuals (fuselage + payload, independent of arm geometry)
@@ -73,6 +74,12 @@ Lx  = d.Lx;
 Lyi = d.Lyi;
 Lyo = d.Lyo;
 arm_span = 2*Lx + 2*Lyi + 2*Lyo;
+
+if isfield(d, 'm_payload') && ~isempty(d.m_payload)
+    m_payload = d.m_payload;
+else
+    m_payload = m_payload_default;
+end
 
 %% ── Propulsion ────────────────────────────────────────────────────────────
 T_max = d.T_max;

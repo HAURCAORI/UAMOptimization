@@ -45,7 +45,14 @@ Env.g   = 9.81;    % [m/s²]
 Env.rho = 1.225;   % [kg/m³]
 
 % ── Dispatch: physics-based model vs legacy fixed-mass path ──────────────
-if isfield(d, 'm_payload')
+use_vehicle_model = false;
+if isfield(d, 'use_vehicle_model')
+    use_vehicle_model = logical(d.use_vehicle_model);
+elseif isfield(d, 'm_payload')
+    use_vehicle_model = true;
+end
+
+if use_vehicle_model
     % ── Physics-based vehicle model (DATCOM-style scaling laws) ──────────
     mdl = vehicle_model(d);
 
