@@ -1,47 +1,19 @@
-function [J, result] = objective_fcn(x, cfg_or_names, d_fixed, eval_options)
-% OBJECTIVE_FCN  Scalar objective for MATLAB optimizers.
+function [J, result] = objective_fcn(x, cfg, d_fixed)
+% OBJECTIVE_FCN  Scalar Stage 1 objective in physical design space.
+%
+%   [J, result] = objective_fcn(x, cfg, d_fixed)
 
-if isstruct(cfg_or_names) && isfield(cfg_or_names, 'vars')
-    cfg = cfg_or_names;
-    if nargin < 3 || isempty(d_fixed)
-        d_fixed = design_default();
-    end
-
-    active = cfg.vars.active;
-    names = cfg.vars.names(active);
-    lb = cfg.vars.lb(active)';
-    ub = cfg.vars.ub(active)';
-    x_phys = lb + x(:) .* (ub - lb);
-
-    eval_opts.mode = cfg.eval.mode;
-    eval_opts.fault_config = cfg.fault;
-    eval_opts.sim_config = cfg.sim;
-    eval_opts.verbose = false;
-    if isfield(cfg, 'objectives') && isfield(cfg.objectives, 'stage1')
-        eval_opts.objectives = cfg.objectives.stage1;
-    end
-    if isfield(cfg, 'model')
-        eval_opts.model = cfg.model;
-    end
-else
-    names = cfg_or_names;
-    x_phys = x(:);
-    if nargin < 4 || isempty(eval_options)
-        eval_opts.mode = 'acs';
-        eval_opts.objectives.names = {'FII', 'hover', 'cost'};
-        eval_opts.objectives.weights = [0.35, 0.40, 0.25];
-        eval_opts.verbose = false;
-    else
-        eval_opts = eval_options;
-    end
+if nargin < 3 || isempty(d_fixed)
+    d_fixed = design_default();
 end
 
+names = cfg.vars.names(cfg.vars.active);
 d = d_fixed;
 for k = 1:numel(names)
-    d.(names{k}) = x_phys(k);
+    d.(names{k}) = x(k);
 end
-if isfield(eval_opts, 'model') && isfield(eval_opts.model, 'use_vehicle_model')
-    d.use_vehicle_model = logical(eval_opts.model.use_vehicle_model);
+if isfield(cfg, 'model') && isfield(cfg.model, 'use_vehicle_model')
+    d.use_vehicle_model = logical(cfg.model.use_vehicle_model);
 end
 
 INFEAS = 1e6;
@@ -61,17 +33,29 @@ if isfield(d, 'Lyo') && isfield(d, 'Lyi') && d.Lyo <= d.Lyi + 0.1
     return;
 end
 
-[UAM, ~, Env] = hexacopter_params(d);
-if isfield(d, 'T_max') && d.T_max < UAM.m * Env.g * 1.05 / 6
+[uam, ~, env] = hexacopter_params(d);
+if isfield(d, 'T_max') && d.T_max < uam.m * env.g * 1.05 / 6
     J = INFEAS;
     result = [];
     return;
 end
 
-result = eval_design(d, eval_opts);
+eval_opt = UAMOptions(cfg, ...
+    'Mode', cfg.eval.mode, ...
+    'Objectives', cfg.objectives.stage1, ...
+    'Model', get_field_or_default(cfg, 'model', struct()));
+result = eval_design(d, eval_opt);
 if ~result.feasible || ~isfinite(result.J_combined)
     J = INFEAS;
 else
     J = result.J_combined;
+end
+end
+
+function value = get_field_or_default(s, name, default_value)
+if isfield(s, name)
+    value = s.(name);
+else
+    value = default_value;
 end
 end
