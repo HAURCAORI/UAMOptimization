@@ -24,6 +24,9 @@ post-optimization validation.
 - `WCFR >= 0.05` — worst-case fault control retention
 - Single-motor hover feasibility for all six motors
 - Nominal hover feasibility
+- Hover origin containment at `Fz = -W, N = 0`: the point `(L,M)=(0,0)` must be feasible
+  under nominal and single-fault conditions; optional positive reserve is set by
+  `cfg.fault.hover_origin_margin_req`
 
 ---
 

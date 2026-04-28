@@ -194,32 +194,24 @@ visualize_results(result_knee_mission, 'sim');
 fprintf('\n  Section 6 complete [%.1f s]\n\n', toc(t_sec));
 
 %% Section 7: ACS Geometry Visualization
+% Full 5-figure ACS analysis for baseline and SOO-optimal designs.
+% Most important plot: Fig 3 (Fz=-W slice) – roll/pitch/yaw moment envelope
+% while hovering, showing the direct cost of a single-motor fault on
+% fault-tolerant manoeuvrability.
 fprintf('Section 7: ACS Geometry Visualization\n');
 t_sec = tic;
 
-figure('Name', 'ACS [L,M,N] Projection – Nominal vs Worst-Case Fault');
-design_set  = {d_base, d_soo, d_knee};
-design_lbls = {'Baseline', 'SOO-Optimal', 'Pareto Knee'};
-face_colors = {[0.25 0.55 0.90], [0.15 0.72 0.27], [0.92 0.42 0.14]};
+design_set  = {d_base, d_soo};
+design_lbls = {'Baseline', 'SOO-Optimal'};
 
-for di = 1:3
-    [uam_d, prop_d] = hexacopter_params(design_set{di});
+for di = 1:numel(design_set)
     acs_di = eval_acs(design_set{di});
     [~, worst_k] = min(acs_di.single_retention);
     loe_worst = zeros(6, 1);  loe_worst(worst_k) = 1;
-
-    subplot(2, 3, di);
-    plot_acs_3d(uam_d.B, prop_d.T_max, zeros(6,1), face_colors{di}, 0.30);
-    title(sprintf('%s (nominal)', design_lbls{di}));
-    xlabel('L'); ylabel('M'); zlabel('N'); grid on; view(30, 20);
-
-    subplot(2, 3, di + 3);
-    plot_acs_3d(uam_d.B, prop_d.T_max, loe_worst, [0.90 0.25 0.20], 0.40);
-    title(sprintf('%s (M%d fault)', design_lbls{di}, worst_k));
-    xlabel('L'); ylabel('M'); zlabel('N'); grid on; view(30, 20);
+    fprintf('  %s: worst-case fault is motor %d (retention=%.4f)\n', ...
+        design_lbls{di}, worst_k, min(acs_di.single_retention));
+    plot_acs_analysis(design_set{di}, loe_worst, design_lbls{di});
 end
-sgtitle('ACS [L,M,N] Projection: Nominal vs Worst-Case Fault', ...
-    'FontSize', 12, 'FontWeight', 'bold');
 
 fprintf('\n  Section 7 complete [%.1f s]\n\n', toc(t_sec));
 
@@ -236,17 +228,3 @@ for k = 1:3
         names_all{k}, r.acs.FII, r.acs.hover_margin, r.J_combined);
 end
 fprintf('===============================================================\n');
-
-%% Local helper
-function plot_acs_3d(B, T_max, loe_vec, face_color, face_alpha)
-[~, pts4d] = compute_acs_volume(B, T_max, loe_vec);
-pts = unique(round(pts4d(:, [2,3,4]), 10), 'rows');
-if size(pts, 1) >= 4 && rank(pts - mean(pts)) >= 3
-    K = convhulln(pts, {'Qt', 'Qx'});
-    trisurf(K, pts(:,1), pts(:,2), pts(:,3), ...
-        'FaceColor', face_color, ...
-        'FaceAlpha', face_alpha, ...
-        'EdgeColor', face_color * 0.55, ...
-        'LineWidth', 0.4);
-end
-end
