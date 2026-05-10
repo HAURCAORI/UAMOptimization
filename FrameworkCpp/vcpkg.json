@@ -1,0 +1,11 @@
+{
+  "name": "hexaarch",
+  "version-string": "0.1.0",
+  "description": "Phase 0 bootstrap for a layered Stage 1 C++ framework for fault-tolerant hexacopter architecture co-design",
+  "dependencies": [
+    "eigen3",
+    "pagmo2",
+    "nlohmann-json",
+    "gtest"
+  ]
+}

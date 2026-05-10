@@ -1,0 +1,177 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="소스 파일">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="소스 파일\app">
+      <UniqueIdentifier>{d8f3e2c1-4b5a-4f9e-9d7c-123456789001}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="소스 파일\core">
+      <UniqueIdentifier>{d8f3e2c1-4b5a-4f9e-9d7c-123456789002}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="소스 파일\physics">
+      <UniqueIdentifier>{d8f3e2c1-4b5a-4f9e-9d7c-123456789003}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="소스 파일\evaluation">
+      <UniqueIdentifier>{d8f3e2c1-4b5a-4f9e-9d7c-123456789004}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="소스 파일\optimization">
+      <UniqueIdentifier>{d8f3e2c1-4b5a-4f9e-9d7c-123456789005}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="소스 파일\analysis">
+      <UniqueIdentifier>{d8f3e2c1-4b5a-4f9e-9d7c-123456789006}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="헤더 파일">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="헤더 파일\analysis">
+      <UniqueIdentifier>{e9f4f3d2-5c6b-40af-ae8d-234567890101}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="헤더 파일\core">
+      <UniqueIdentifier>{e9f4f3d2-5c6b-40af-ae8d-234567890102}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="헤더 파일\evaluation">
+      <UniqueIdentifier>{e9f4f3d2-5c6b-40af-ae8d-234567890103}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="헤더 파일\optimization">
+      <UniqueIdentifier>{e9f4f3d2-5c6b-40af-ae8d-234567890104}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="헤더 파일\physics">
+      <UniqueIdentifier>{e9f4f3d2-5c6b-40af-ae8d-234567890105}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="리소스 파일">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="vcpkg.json" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="app\main_stage1.cpp">
+      <Filter>소스 파일\app</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\ComparisonReporter.cpp">
+      <Filter>소스 파일\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\ParetoAnalyzer.cpp">
+      <Filter>소스 파일\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\Constraint.cpp">
+      <Filter>소스 파일\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\ConstraintRegistry.cpp">
+      <Filter>소스 파일\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\DesignParameter.cpp">
+      <Filter>소스 파일\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\HexacopterArchitecture.cpp">
+      <Filter>소스 파일\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\ParameterRegistry.cpp">
+      <Filter>소스 파일\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\evaluation\ArchitectureEvaluator.cpp">
+      <Filter>소스 파일\evaluation</Filter>
+    </ClCompile>
+    <ClCompile Include="src\evaluation\EvaluationContext.cpp">
+      <Filter>소스 파일\evaluation</Filter>
+    </ClCompile>
+    <ClCompile Include="src\evaluation\ObjectiveAggregator.cpp">
+      <Filter>소스 파일\evaluation</Filter>
+    </ClCompile>
+    <ClCompile Include="src\evaluation\Stage1Evaluator.cpp">
+      <Filter>소스 파일\evaluation</Filter>
+    </ClCompile>
+    <ClCompile Include="src\optimization\DesignVectorMapper.cpp">
+      <Filter>소스 파일\optimization</Filter>
+    </ClCompile>
+    <ClCompile Include="src\optimization\MooRunner.cpp">
+      <Filter>소스 파일\optimization</Filter>
+    </ClCompile>
+    <ClCompile Include="src\optimization\OptimizationProblem.cpp">
+      <Filter>소스 파일\optimization</Filter>
+    </ClCompile>
+    <ClCompile Include="src\optimization\PagmoProblemAdapter.cpp">
+      <Filter>소스 파일\optimization</Filter>
+    </ClCompile>
+    <ClCompile Include="src\optimization\SooRunner.cpp">
+      <Filter>소스 파일\optimization</Filter>
+    </ClCompile>
+    <ClCompile Include="src\physics\AllocationMatrixBuilder.cpp">
+      <Filter>소스 파일\physics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\physics\PhysicsTypes.cpp">
+      <Filter>소스 파일\physics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\physics\VehicleScalingModel.cpp">
+      <Filter>소스 파일\physics</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\analysis\ComparisonReporter.hpp">
+      <Filter>헤더 파일\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="include\analysis\ParetoAnalyzer.hpp">
+      <Filter>헤더 파일\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="include\core\Constraint.hpp">
+      <Filter>헤더 파일\core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\core\ConstraintRegistry.hpp">
+      <Filter>헤더 파일\core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\core\DesignParameter.hpp">
+      <Filter>헤더 파일\core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\core\HexacopterArchitecture.hpp">
+      <Filter>헤더 파일\core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\core\ParameterRegistry.hpp">
+      <Filter>헤더 파일\core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\evaluation\ArchitectureEvaluator.hpp">
+      <Filter>헤더 파일\evaluation</Filter>
+    </ClInclude>
+    <ClInclude Include="include\evaluation\EvaluationContext.hpp">
+      <Filter>헤더 파일\evaluation</Filter>
+    </ClInclude>
+    <ClInclude Include="include\evaluation\EvaluationResult.hpp">
+      <Filter>헤더 파일\evaluation</Filter>
+    </ClInclude>
+    <ClInclude Include="include\evaluation\ObjectiveAggregator.hpp">
+      <Filter>헤더 파일\evaluation</Filter>
+    </ClInclude>
+    <ClInclude Include="include\evaluation\Stage1Evaluator.hpp">
+      <Filter>헤더 파일\evaluation</Filter>
+    </ClInclude>
+    <ClInclude Include="include\optimization\DesignVectorMapper.hpp">
+      <Filter>헤더 파일\optimization</Filter>
+    </ClInclude>
+    <ClInclude Include="include\optimization\MooRunner.hpp">
+      <Filter>헤더 파일\optimization</Filter>
+    </ClInclude>
+    <ClInclude Include="include\optimization\OptimizationProblem.hpp">
+      <Filter>헤더 파일\optimization</Filter>
+    </ClInclude>
+    <ClInclude Include="include\optimization\PagmoProblemAdapter.hpp">
+      <Filter>헤더 파일\optimization</Filter>
+    </ClInclude>
+    <ClInclude Include="include\optimization\SooRunner.hpp">
+      <Filter>헤더 파일\optimization</Filter>
+    </ClInclude>
+    <ClInclude Include="include\physics\AllocationMatrixBuilder.hpp">
+      <Filter>헤더 파일\physics</Filter>
+    </ClInclude>
+    <ClInclude Include="include\physics\PhysicsTypes.hpp">
+      <Filter>헤더 파일\physics</Filter>
+    </ClInclude>
+    <ClInclude Include="include\physics\VehicleScalingModel.hpp">
+      <Filter>헤더 파일\physics</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>

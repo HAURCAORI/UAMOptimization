@@ -1,0 +1,66 @@
+# --- CMake / Ninja / presets ---
+**/CMakeCache.txt
+**/CMakeFiles/
+**/cmake_install.cmake
+**/CTestTestfile.cmake
+**/install_manifest.txt
+**/Makefile
+**/*.ninja
+**/rules.ninja
+**/build.ninja
+**/.ninja_deps
+**/.ninja_log
+**/CMakeScripts/
+**/compile_commands.json
+
+# Common CMake binary dirs (VS CMake uses `out/`; other setups use `build/`)
+build/
+out/
+cmake-build-*/
+**/cmake-build-*/
+
+# vcpkg manifest installs (under build trees or legacy layouts)
+vcpkg_installed/
+
+# --- Visual Studio / MSVC ---
+.vs/
+*.vcxproj.user
+*.vcxproj.filters.user
+*.sln.docstates
+*.suo
+*.userosscache
+*.ilk
+*.pdb
+*.idb
+*.opendb
+Browse.VC.db*
+
+# --- Compiled binaries / libs (keep repo source-only) ---
+*.exe
+*.dll
+*.lib
+*.obj
+*.o
+*.a
+*.exp
+
+# --- Python (repo scripts/tools) ---
+__pycache__/
+*.py[cod]
+.Python
+.venv/
+venv/
+.env
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# --- MATLAB ---
+*.asv
+
+
+CppFramework
