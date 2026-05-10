@@ -9,11 +9,7 @@ if ~isfield(sim_config, 'loe_vec')
     sim_config.loe_vec = [1;0;0;0;0;0];
 end
 if ~isfield(sim_config, 't_end')
-    if isfield(sim_config, 'T_end')
-        sim_config.t_end = sim_config.T_end;
-    else
-        sim_config.t_end = 40;
-    end
+    sim_config.t_end = 40;
 end
 if ~isfield(sim_config, 'dt')
     sim_config.dt = 0.01;
@@ -24,13 +20,14 @@ end
 if ~isfield(sim_config, 'use_scaled_gains')
     sim_config.use_scaled_gains = true;
 end
+if ~isfield(sim_config, 'scenario')
+    sim_config.scenario = 'hover';
+end
+if ~isfield(sim_config, 'nominal_eval_start')
+    sim_config.nominal_eval_start = min(5.0, max(1.0, 0.2 * sim_config.t_end));
+end
 
-if isfield(sim_config, 't_fault')
-    sim_config.fault_time = sim_config.t_fault;
-elseif isfield(sim_config, 'fault_time')
-    sim_config.t_fault = sim_config.fault_time;
-else
+if ~isfield(sim_config, 't_fault')
     sim_config.t_fault = 10;
-    sim_config.fault_time = 10;
 end
 end

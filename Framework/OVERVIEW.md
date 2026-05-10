@@ -1,26 +1,41 @@
 # Framework Overview
 
-## 1. Current Status
+## 1. Current State
 
-The framework now has two connected layers:
+The framework has two connected layers:
 
 - Stage 1: design optimization
 - Stage 2: mission validation
 
-Stage 1 is the main working optimization layer.
-Stage 2 is implemented and usable, but it is currently a secondary
-validation layer rather than the primary optimization loop.
+Stage 1 is the main optimization layer. Stage 2 is the secondary validation
+layer.
 
----
+## 2. Interface Design
 
-## 2. What Is Implemented
+The code now uses one public option model:
+
+- `cfg = mdo_config()` for framework configuration
+- `opt = UAMOptions(cfg, ...)` for call-level behavior
+
+The public evaluation and analysis helpers use `UAMOptions` consistently:
+
+- `eval_design`
+- `compare_designs`
+- `sweep_design_space`
+- `pareto_analysis`
+
+The optimization drivers remain cfg-driven:
+
+- `run_soo`
+- `run_moo`
+
+## 3. Implemented Capability
 
 ### Stage 1
 
 - ACS-based fault-tolerance evaluation
 - single-motor-fault hover screening
 - parameterized mass and inertia model
-- cost surrogate tied to the vehicle model
 - SOO workflow
 - MOO workflow
 - Pareto analysis and design comparison
@@ -28,14 +43,12 @@ validation layer rather than the primary optimization loop.
 ### Stage 2
 
 - hover simulation path
-- figure-8 mission simulation path
+- figure-8 mission path
 - normalized simulation config handling
-- analytic gain scaling for fairer cross-design evaluation
+- analytically scaled gains
 - mission verification block in `main_mdo.m`
 
----
-
-## 3. Current Design Variables
+## 4. Current Variables
 
 Active by default:
 
@@ -44,114 +57,41 @@ Active by default:
 - `Lyo`
 - `T_max`
 
-Reserved but frozen by default:
+Reserved but frozen:
 
 - `d_prop`
 
-The code is structured so more variables can be added later without
-rewriting the evaluation or optimization flow.
-
----
-
-## 4. Current Objectives
-
-### Stage 1 objectives
-
-Current default:
-
-- `FII`
-- `hover`
-- `cost`
-
-Configured through:
-
-```matlab
-cfg.objectives.stage1.names
-cfg.objectives.stage1.weights
-cfg.objectives.stage1.moo_names
-```
-
-### Stage 2 objective
-
-Current default:
-
-- `mission`
-
-Configured through:
-
-```matlab
-cfg.objectives.stage2.names
-cfg.objectives.stage2.weights
-```
-
-At the current stage, Stage 2 objectives are used for validation and
-comparison, not for the main optimization loop.
-
----
-
-## 5. Optimization Structure
+## 5. Current Objectives
 
 ### Stage 1
 
-Primary optimization problem.
-
-Meaning:
-
-- optimize design variables
-- screen infeasible designs early
-- compare design trade-offs before mission-level tuning
+- `mass`
+- `power`
+- `fault_thrust`
+- `fault_alloc`
+- `hover_nom`
 
 ### Stage 2
 
-Secondary validation problem.
+- `mission`
 
-Meaning:
+Stage 2 objectives are currently used for validation and comparison, not for
+the main optimization loop.
 
-- test whether selected Stage 1 designs are controllable
-- evaluate mission tracking and recovery
-- support later controller tuning if needed
+## 6. Recommended Interpretation
 
-This keeps the project focused on MDO rather than turning the main problem
-into controller co-design too early.
+Safe current statement:
 
----
+- the framework can optimize Stage 1 designs and then validate selected
+  designs in Stage 2
 
-## 6. Current Interpretation
+Unsafe overstatement:
 
-What can be claimed safely now:
+- the framework is already a full mission-coupled optimization loop
 
-- Stage 1 optimization is functioning
-- candidate designs can be ranked by fault-tolerance and cost-related metrics
-- Stage 2 mission evaluation exists for practical validation
+## 7. Near-Term Direction
 
-What should not be overstated:
-
-- that the final problem is already a full UAM mission optimization
-- that controller optimization is the main contribution
-- that the current cost model is a complete structural design model
-
----
-
-## 7. Recommended Team Decision Points
-
-The next team decisions should be:
-
-1. final Stage 1 design variables
-2. final Stage 1 objective set
-3. whether any additional propulsion or structural variables should be added
-4. how much of Stage 2 should remain validation-only versus later becoming
-   part of the optimization
-
----
-
-## 8. Near-Term Direction
-
-Recommended workflow:
-
-1. keep Stage 1 as the primary optimization path
-2. use Stage 2 to validate representative designs
-3. decide final decision variables and objectives with the team
-4. then extend the framework only where the final formulation requires it
-
-This is the most explainable and course-appropriate structure for the
-current project.
+1. keep Stage 1 as the main optimization layer
+2. use Stage 2 to validate representative candidate designs
+3. decide final variables and objectives with the team
+4. extend the framework only where the final formulation requires it

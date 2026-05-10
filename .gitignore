@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # --- CMake / Ninja / presets ---
 **/CMakeCache.txt
 **/CMakeFiles/
@@ -64,3 +65,6 @@ Thumbs.db
 
 
 CppFramework
+=======
+*.asv
+>>>>>>> 92fd52a6169326e6ed9c4859a5ba3402664f9568

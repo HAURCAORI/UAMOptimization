@@ -5,376 +5,162 @@
 This framework supports a staged multidisciplinary design study for a
 fault-tolerant hexacopter.
 
-Current project structure:
-
 - Stage 1: design optimization
-- Stage 2: mission-level validation
+- Stage 2: mission validation
 
-The current implementation is intentionally centered on Stage 1. Stage 2 is
-implemented as a secondary validation layer, not the primary optimization
-loop.
+Stage 1 is the primary optimization layer. Stage 2 is the secondary
+validation layer.
 
----
+## 2. Public Interface
 
-## 2. Main Idea
+The framework uses two top-level concepts:
 
-The framework separates the problem into two parts.
+- `cfg = mdo_config()`
+  framework configuration
+- `opt = UAMOptions(cfg, ...)`
+  call-level behavior
 
-### Stage 1: design-side screening and optimization
+Use `cfg` to set variables, objectives, optimizer settings, and base
+simulation settings. Use `UAMOptions` to choose how one function call should
+run.
 
-Stage 1 evaluates whether a design is promising from the vehicle side:
-
-- control-effectiveness balance under fault
-- single-motor-fault hover survivability
-- simple parameterized cost and mass effects
-
-This stage is fast and is the default optimization path.
-
-### Stage 2: mission and controller validation
-
-Stage 2 evaluates whether a selected design can perform a closed-loop mission:
-
-- hover-recovery response
-- figure-8 mission tracking
-- attitude excursion
-- control effort
-- mission-level divergence or recovery
-
-This stage is slower and is used after Stage 1 candidate designs are found.
-
----
-
-## 3. Directory Structure
+## 3. Main Files
 
 ```text
 Framework/
   main_mdo.m
-  OVERVIEW.md
-  MANUAL.md
-  config/
-    mdo_config.m
-  core/
-    design_default.m
-    vehicle_model.m
-    hexacopter_params.m
-    build_B_matrix.m
-    eom_hex.m
-  evaluation/
-    eval_stage1.m
-    eval_stage2.m
-    eval_design.m
-    eval_acs.m
-    eval_simulation.m
-    eval_mission_figure8.m
-    figure8_reference.m
-    normalize_sim_config.m
-    tune_sim_gains.m
-  metrics/
-    compute_acs_volume.m
-    hover_feasibility.m
-    compute_hover_threshold.m
-    fault_isotropy_index.m
-  optimization/
-    objective_fcn.m
-    constraint_fcn.m
-    run_soo.m
-    run_cmaes.m
-    run_moo.m
-  analysis/
-    sweep_design_space.m
-    pareto_analysis.m
-    compare_designs.m
-    visualize_results.m
+  config/mdo_config.m
+  core/UAMOptions.m
+  core/hexacopter_params.m
+  evaluation/eval_design.m
+  evaluation/eval_stage1.m
+  evaluation/eval_stage2.m
+  evaluation/eval_simulation.m
+  evaluation/eval_mission_figure8.m
+  optimization/run_soo.m
+  optimization/run_moo.m
+  analysis/compare_designs.m
+  analysis/sweep_design_space.m
+  analysis/pareto_analysis.m
+  analysis/visualize_results.m
 ```
 
----
+## 4. Stage Structure
 
-## 4. Vehicle Model
+### Stage 1
 
-The baseline design is defined in `design_default.m`.
+Stage 1 evaluates design-side fault-tolerance:
 
-The active geometry is a tandem hexacopter:
+- ACS metrics
+- single-motor-fault hover feasibility
+- parameterized cost and mass effects
 
-- `Lx`: fore-aft arm length
-- `Lyi`: inner lateral arm length
-- `Lyo`: outer lateral arm length
-- `T_max`: maximum thrust per motor
-- `d_prop`: optional propeller diameter variable, frozen by default
+Main outputs:
 
-The default path uses a parameterized vehicle model in `vehicle_model.m`.
-That means:
+- `FII`
+- `WCFR`
+- `PFWAR`
+- `hover_margin`
+- `J_cost`
+- `J_combined`
+- `feasible`
 
-- motor mass changes with `T_max`
-- frame mass changes with arm span
-- total mass changes with the design
-- inertia changes with the design
+### Stage 2
 
-This is the main novelty direction of the current implementation: a compact
-parameterized design model embedded into optimization.
+Stage 2 evaluates mission-level closed-loop behavior:
 
----
+- hover recovery
+- figure-8 tracking
+- altitude error
+- attitude excursion
+- control effort
+- divergence
 
-## 5. Current Design Variables
+Main outputs:
 
-The default active Stage 1 variables are:
+- `path_rmse`
+- `alt_rmse`
+- `total_rmse`
+- `recovery_time`
+- `max_att_excurs`
+- `ctrl_effort`
+- `diverged`
+- `J_mission`
+
+## 5. Design Variables
+
+Default active variables:
 
 - `Lx`
 - `Lyi`
 - `Lyo`
 - `T_max`
 
-The default reserved variable is:
+Reserved but frozen by default:
 
 - `d_prop`
 
-All variable settings are controlled from `config/mdo_config.m`.
-
-Relevant config fields:
-
-```matlab
-cfg.vars.names
-cfg.vars.lb
-cfg.vars.ub
-cfg.vars.x0
-cfg.vars.units
-cfg.vars.active
-```
-
-To freeze or activate a variable, edit `cfg.vars.active`.
-
----
+These are controlled in `cfg.vars.*`.
 
 ## 6. Objectives
 
-### Stage 1 objectives
+### Stage 1
 
-Stage 1 is objective-registry based.
-
-The default Stage 1 objective set is:
+Configured in `cfg.objectives.stage1`:
 
 ```matlab
-cfg.objectives.stage1.names   = {'FII', 'hover', 'cost'};
-cfg.objectives.stage1.weights = [0.35, 0.40, 0.25];
+cfg.objectives.stage1.names     = {'mass', 'power', 'fault_thrust', 'fault_alloc', 'hover_nom'};
+cfg.objectives.stage1.weights   = [0.20, 0.20, 0.25, 0.25, 0.10];
+cfg.objectives.stage1.moo_names = {'mass', 'power', 'fault'};
 ```
 
-Current meanings:
+### Stage 2
 
-- `FII`: fault isotropy index
-- `hover`: hover survivability penalty
-- `cost`: parameterized design cost proxy
-
-For multi-objective optimization:
-
-```matlab
-cfg.objectives.stage1.moo_names = {'FII', 'hover', 'cost'};
-```
-
-### Stage 2 objectives
-
-Stage 2 is currently used for validation.
-
-The current Stage 2 objective registry is:
+Configured in `cfg.objectives.stage2`:
 
 ```matlab
 cfg.objectives.stage2.names   = {'mission'};
 cfg.objectives.stage2.weights = 1.0;
 ```
 
-This is used in the mission verification block in `main_mdo.m`.
+## 7. Vehicle Model
 
-### Legacy weights
+The default framework path uses the parameterized vehicle model in
+`vehicle_model.m`.
 
-`cfg.weights.*` is still present for backward compatibility with older code,
-but the current framework direction is:
+Current coupling:
 
-- use `cfg.objectives.stage1.*` for Stage 1
-- use `cfg.objectives.stage2.*` for Stage 2
+- motor mass varies with `T_max`
+- frame mass varies with geometry
+- total mass varies with design
+- inertia varies with design
 
----
+This is the main parameterized-design contribution of the current framework.
 
-## 7. Stage 1 Evaluation
+## 8. Controller Handling
 
-Stage 1 is implemented through `eval_stage1.m` and used in `eval_design.m`.
+Stage 2 simulation uses analytically scaled gains through
+`tune_sim_gains.m`.
 
-Main Stage 1 outputs:
+Intent:
 
-- `FII`
-- `WCFR`
-- `PFWAR`
-- `hover_margin`
-- `hover_ok`
-- `J_cost`
-- `feasible`
+- keep controller bandwidth roughly comparable across designs
+- avoid penalizing compact or heavy designs only because of fixed baseline gains
 
-Stage 1 feasibility currently means:
+Controller gains are not Stage 1 optimization variables.
 
-- geometry is valid
-- ACS screening passes
-- single-motor-fault hover screening passes
+## 9. Main Usage
 
-Stage 1 is the main optimization layer.
-
-It should be described as:
-
-- fault-tolerant design screening
-- ACS/hover feasibility optimization
-
-It should not be described as:
-
-- full mission feasibility
-
----
-
-## 8. Stage 2 Evaluation
-
-Stage 2 is implemented through `eval_stage2.m`.
-
-It supports two scenarios:
-
-- `hover`
-- `figure8`
-
-Configured through:
+### Baseline Stage 1 evaluation
 
 ```matlab
-cfg.sim.scenario = 'hover';   % or 'figure8'
-```
-
-### Hover scenario
-
-This uses `eval_simulation.m` and evaluates:
-
-- altitude tracking
-- attitude excursion
-- recovery time
-- control effort
-- divergence
-
-### Figure-8 scenario
-
-This uses `eval_mission_figure8.m` and evaluates:
-
-- `path_rmse`
-- `alt_rmse`
-- `total_rmse`
-- `att_rmse_phi`
-- `att_rmse_theta`
-- `max_att_excurs`
-- `ctrl_effort`
-- `recovery_time`
-- `diverged`
-
-Mission settings are stored in:
-
-```matlab
-cfg.sim.mission.A
-cfg.sim.mission.T_period
-cfg.sim.mission.z_cruise
-cfg.sim.mission.t_start
-cfg.sim.mission.n_laps
-```
-
-The simulation config path is normalized by `normalize_sim_config.m`, so both
-`fault_time` and `t_fault` are supported.
-
----
-
-## 9. Controller Handling
-
-The simulation controller uses analytic gain scaling rather than fixed gains
-for every design.
-
-Current intent:
-
-- keep controller bandwidth approximately comparable across designs
-- avoid unfairly destabilizing low-inertia or high-mass designs
-
-This is handled by `tune_sim_gains.m`.
-
-At the current project stage:
-
-- controller gains are not Stage 1 optimization variables
-- controller tuning is part of Stage 2 validation logic
-
----
-
-## 10. Main Functions
-
-### `mdo_config`
-
-Creates the master configuration:
-
-- variables
-- objectives
-- optimizer settings
-- simulation settings
-
-### `design_default`
-
-Creates the baseline design struct.
-
-### `hexacopter_params`
-
-Builds the `UAM`, `Prop`, and `Env` parameter structs from a design.
-
-### `eval_design`
-
-Main entry point for evaluation.
-
-Supported modes:
-
-- `'acs'`
-- `'sim'`
-- `'full'`
-
-Meaning:
-
-- `'acs'`: Stage 1 only
-- `'sim'`: Stage 2 only
-- `'full'`: Stage 1 + Stage 2
-
-### `run_soo`
-
-Single-objective optimization driver.
-
-Used for the main Stage 1 optimization run.
-
-### `run_moo`
-
-Multi-objective optimization driver.
-
-Used for Pareto analysis of the current Stage 1 objective set.
-
-### `compare_designs`
-
-Runs a consistent side-by-side evaluation for multiple designs.
-
-### `visualize_results`
-
-Plots ACS, simulation, sweep, and Pareto results.
-
-For mission data it also shows mission tracking plots.
-
----
-
-## 11. How To Run
-
-### Full framework script
-
-```matlab
-cd C:\local\project\UAMOptimization\Framework
-main_mdo
-```
-
-### Stage 1 baseline evaluation
-
-```matlab
-addpath('config','core','evaluation','metrics','optimization','analysis');
+cfg = mdo_config();
 d = design_default();
-r = eval_design(d, struct('mode','acs','verbose',true));
+opt = UAMOptions(cfg, 'Mode', 'acs', 'Verbose', true);
+r = eval_design(d, opt);
 ```
 
-### Stage 1 single-objective optimization
+### Stage 1 SOO
 
 ```matlab
 cfg = mdo_config();
@@ -382,7 +168,7 @@ cfg.eval.mode = 'acs';
 [d_opt, J_opt, hist] = run_soo(design_default(), cfg);
 ```
 
-### Stage 1 multi-objective optimization
+### Stage 1 MOO
 
 ```matlab
 cfg = mdo_config();
@@ -394,113 +180,57 @@ cfg.eval.mode = 'acs';
 
 ```matlab
 cfg = mdo_config();
-cfg.sim.scenario = 'figure8';
-r = eval_design(design_default(), struct( ...
-    'mode', 'full', ...
-    'sim_config', cfg.sim, ...
-    'loe_for_sim', [1;0;0;0;0;0]));
+mission_cfg = cfg.sim;
+mission_cfg.scenario = 'figure8';
+opt = UAMOptions(cfg, ...
+    'Mode', 'full', ...
+    'Fault', [1;0;0;0;0;0], ...
+    'SimConfig', mission_cfg, ...
+    'ObjectiveSet', 'stage2');
+r = eval_design(design_default(), opt);
 ```
 
----
+## 10. `main_mdo.m`
 
-## 12. What `main_mdo.m` Does
-
-`main_mdo.m` is a demonstration and reporting script.
+`main_mdo.m` is the canonical demonstration script.
 
 Current sections:
 
 1. baseline evaluation
-2. design sweeps
+2. Stage 1 sweeps
 3. Stage 1 SOO
-4. Stage 1 MOO / Pareto analysis
+4. Stage 1 MOO
 5. design comparison
 6. Stage 2 mission verification
 7. ACS visualization
 
-Important note:
+It now uses `UAMOptions` consistently for all call-level behavior.
 
-- Stage 1 optimization and Stage 2 validation are both present in the script
-- the primary optimization remains Stage 1
+## 11. Team Interpretation
 
-The Stage 2 mission verification block currently uses:
-
-- `scenario = 'figure8'`
-- a short mission
-- motor 1 fault
-- comparison of baseline / SOO-optimal / Pareto-knee
-
-The Pareto-knee design is then plotted in more detail as the representative
-mission case.
-
----
-
-## 13. Interpretation Guide
-
-### When Stage 1 results are reasonable
-
-Typical healthy trends:
-
-- `FII` decreases for better balanced designs
-- `hover_ok` improves when `T_max` rises past the threshold
-- SOO prefers lighter/cheaper feasible solutions
-- Pareto-knee trades cost for better balance and hover margin
-
-### What Stage 1 does not prove
-
-Stage 1 does not prove:
-
-- mission tracking quality
-- controller robustness
-- degraded-fault handling
-- multifault handling
-
-Those belong to Stage 2 or later extensions.
-
-### What Stage 2 currently means
-
-Stage 2 is currently:
-
-- a secondary validation layer
-- useful for checking mission capability trends
-- not yet the primary optimization problem
-
----
-
-## 14. Recommended Team Usage
-
-For team discussion, use the framework in this order:
-
-1. decide candidate Stage 1 design variables
-2. run Stage 1 SOO and MOO
-3. choose promising candidate designs
-4. run Stage 2 mission validation on those candidates
-5. decide whether Stage 2 should later become part of the optimization
-
-This keeps the project centered on MDO while still showing practical
-controller and mission verification.
-
----
-
-## 15. Current Limitations
-
-- Stage 1 variable set is still compact
-- the cost model is still a surrogate, not a full structural model
-- allocation logic is still simplified
-- degraded-fault and multifault optimization are not yet the main path
-- `main_mdo.m` still contains some legacy comment/encoding clutter outside
-  the core logic
-
-These are known limitations, not hidden assumptions.
-
----
-
-## 16. Short Summary
-
-Current framework status:
+Safe current claims:
 
 - Stage 1 design optimization is implemented and usable
 - Stage 2 mission validation is implemented and usable as a secondary check
-- the framework is structured to remain extensible as final variables and
-  objectives are decided
+- the code is structured to extend variables and objectives later
 
-This is the correct way to present the current codebase to teammates.
+Claims to avoid:
+
+- that Stage 2 is already the primary optimization loop
+- that the current cost model is a complete structural design model
+- that controller tuning is the primary contribution
+
+## 12. Current Limitations
+
+- Stage 1 variable set is still compact
+- the cost model is still a surrogate
+- allocation logic is still simplified
+- degraded-fault and multifault optimization are future extensions
+
+## 13. Recommended Workflow
+
+1. decide candidate Stage 1 variables
+2. run Stage 1 SOO and MOO
+3. choose representative candidate designs
+4. run Stage 2 validation on those candidates
+5. decide whether Stage 2 should later move into the optimization loop

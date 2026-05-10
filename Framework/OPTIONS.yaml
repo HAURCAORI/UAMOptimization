@@ -1,0 +1,362 @@
+interface:
+  public_call_level_type: UAMOptions
+  optimizer_input_type: cfg
+  note: >
+    Use UAMOptions for eval_design, compare_designs, sweep_design_space,
+    and pareto_analysis. Use cfg = mdo_config() for run_soo and run_moo.
+
+quick_start:
+  build_cfg:
+    code: "cfg = mdo_config();"
+  stage1_eval:
+    code: "r = eval_design(design_default(), UAMOptions(cfg, 'Mode', 'acs', 'Verbose', true));"
+  stage2_eval:
+    code: >
+      r = eval_design(design_default(),
+      UAMOptions(cfg, 'Mode', 'full', 'ObjectiveSet', 'stage2',
+      'Fault', [1;0;0;0;0;0], 'Scenario', 'figure8'));
+  compare:
+    code: >
+      compare_designs({d1,d2}, {'Baseline','Candidate'},
+      UAMOptions(cfg, 'Mode', 'full', 'Plot', false));
+  sweep:
+    code: >
+      sw = sweep_design_space(design_default(), 'Lx', linspace(1,5,20),
+      UAMOptions(cfg, 'Mode', 'acs', 'Verbose', false));
+  pareto_post:
+    code: >
+      [F_nd, d_nd, knee_idx] = pareto_analysis(designs, F,
+      UAMOptions(cfg, 'Plot', true));
+
+uam_options:
+  constructor:
+    forms:
+      - "UAMOptions()"
+      - "UAMOptions(cfg)"
+      - "UAMOptions('Name', value, ...)"
+      - "UAMOptions(cfg, 'Name', value, ...)"
+    cfg_detection:
+      required_fields: [vars, opt]
+
+  properties:
+    Config:
+      type: cfg
+      default: empty struct
+      meaning: "Base configuration from mdo_config()."
+      used_by:
+        - eval_design
+        - compare_designs
+        - sweep_design_space
+        - pareto_analysis
+
+    Mode:
+      type: string
+      allowed: [acs, sim, full]
+      default_from_cfg: cfg.eval.mode
+      hard_default_without_cfg: acs
+      meaning: "Main evaluation mode."
+
+    FaultConfig:
+      type: struct
+      default_from_cfg: cfg.fault
+      hard_default_without_cfg:
+        include_double: false
+        p_motor: 0.05
+      meaning: "Stage 1 fault-analysis settings passed to eval_stage1/eval_acs."
+      fields:
+        include_double:
+          type: logical
+          meaning: "Include double-motor ACS fault cases."
+        p_motor:
+          type: numeric scalar
+          meaning: "Per-motor fault probability used in PFWAR."
+
+    SimConfig:
+      type: struct
+      default_from_cfg: cfg.sim
+      hard_default_after_normalization:
+        loe_vec: [1, 0, 0, 0, 0, 0]
+        t_end: 40
+        dt: 0.01
+        alt_cmd: 10
+        use_scaled_gains: true
+        t_fault: 10
+        fault_time: 10
+      meaning: "Full simulation config override used by Stage 2."
+      aliases:
+        T_end: "Accepted alias for t_end."
+        fault_time: "Accepted alias for t_fault."
+      fields:
+        loe_vec:
+          type: vector length 6
+          meaning: "Loss-of-effectiveness vector used in simulation."
+        t_end:
+          type: numeric scalar
+          meaning: "Simulation end time [s]."
+        T_end:
+          type: numeric scalar
+          meaning: "Alias for t_end."
+        dt:
+          type: numeric scalar
+          meaning: "Simulation timestep [s]."
+        alt_cmd:
+          type: numeric scalar
+          meaning: "Hover-altitude command [m]."
+        t_fault:
+          type: numeric scalar
+          meaning: "Fault injection time [s]."
+        fault_time:
+          type: numeric scalar
+          meaning: "Alias for t_fault."
+        scenario:
+          type: string
+          allowed: [hover, figure8]
+          default_from_cfg: cfg.sim.scenario
+          meaning: "Stage 2 scenario selector."
+        use_scaled_gains:
+          type: logical
+          default_after_normalization: true
+          meaning: "Enable analytic gain scaling."
+        mission:
+          type: struct
+          meaning: "Figure-8 mission settings."
+          fields:
+            A:
+              type: numeric scalar
+              default_from_cfg: cfg.sim.mission.A
+              meaning: "Figure-8 amplitude [m]."
+            T_period:
+              type: numeric scalar
+              default_from_cfg: cfg.sim.mission.T_period
+              meaning: "Figure-8 period [s]."
+            z_cruise:
+              type: numeric scalar
+              default_from_cfg: cfg.sim.mission.z_cruise
+              meaning: "Mission altitude [m]."
+            t_start:
+              type: numeric scalar
+              default_from_cfg: cfg.sim.mission.t_start
+              meaning: "Climb time before figure-8 starts [s]."
+            n_laps:
+              type: numeric scalar
+              default_from_cfg: cfg.sim.mission.n_laps
+              meaning: "Number of figure-8 laps."
+            ramp_time:
+              type: numeric scalar
+              default_from_cfg: cfg.sim.mission.ramp_time
+              meaning: "Reference blend-in time [s]."
+
+    Scenario:
+      type: string
+      allowed: [hover, figure8]
+      meaning: "Shortcut that writes SimConfig.scenario."
+
+    Fault:
+      type: vector length 6
+      meaning: "Shortcut fault vector."
+      mapping:
+        eval_design: "becomes loe_for_sim, then sim_config.loe_vec if omitted there"
+        compare_designs: "becomes sim_loe"
+
+    Mission:
+      type: struct
+      meaning: "Shortcut that writes SimConfig.mission."
+
+    ObjectiveSet:
+      type: string
+      allowed: [stage1, stage2]
+      meaning: "Load objective block from cfg.objectives or built-in defaults."
+      mapping:
+        stage1:
+          names: [FII, hover, cost]
+          weights: [0.35, 0.40, 0.25]
+        stage2:
+          names: [mission]
+          weights: [1.0]
+
+    Objectives:
+      type: struct
+      meaning: "Explicit objective override."
+      fields:
+        names:
+          type: cell array of strings
+          meaning: "Objective names used by eval_design."
+        weights:
+          type: numeric vector
+          meaning: "Objective weights paired with names."
+        moo_names:
+          type: cell array of strings
+          optional: true
+          meaning: "Used by cfg.objectives.stage1 for MOO labeling."
+      supported_objective_names:
+        - FII
+        - hover
+        - mission
+        - cost
+        - struct
+        - motor
+        - WCFR
+        - PFWAR
+        - hover_margin_deficit
+
+    Model:
+      type: struct
+      default_from_cfg: cfg.model
+      meaning: "Model override."
+      fields:
+        use_vehicle_model:
+          type: logical
+          meaning: "Use parameterized vehicle model instead of fixed-mass path."
+
+    Plot:
+      type: logical
+      default_from_cfg:
+        compare_designs: true
+        pareto_analysis: true
+      meaning: "Enable plots for analysis helpers."
+
+    Verbose:
+      type: logical
+      default_from_cfg:
+        eval_design: false
+        compare_designs: true
+        sweep_design_space: false
+      meaning: "Enable printed summaries or progress."
+
+    Labels:
+      type: cell array of strings
+      used_by:
+        - pareto_analysis
+      maps_to: f_labels
+      meaning: "Axis labels for Pareto plots."
+
+    Weights:
+      type: numeric vector
+      used_by:
+        - pareto_analysis
+      meaning: "Reserved weighting vector for Pareto post-processing."
+
+public_functions:
+  eval_design:
+    signature: "result = eval_design(d, opt)"
+    default_if_opt_omitted: "UAMOptions()"
+    option_conversion:
+      output_struct_fields:
+        - mode
+        - fault_config
+        - sim_config
+        - loe_for_sim
+        - verbose
+        - model
+        - objectives
+    result_notes:
+      - "If SimConfig.loe_vec is omitted, Fault is copied into it."
+      - "SimConfig is always normalized through normalize_sim_config()."
+
+  compare_designs:
+    signature: "compare_designs(designs, labels, opt)"
+    default_if_opt_omitted: "UAMOptions()"
+    option_conversion:
+      output_struct_fields:
+        - eval_mode
+        - sim_loe
+        - sim_config
+        - plot
+        - verbose
+        - objectives
+        - model
+    notes:
+      - "Fault maps to sim_loe."
+      - "sim_config.loe_vec is overwritten from sim_loe before evaluation."
+
+  sweep_design_space:
+    signature: "results = sweep_design_space(d_base, sweep_var, sweep_range, opt)"
+    default_if_opt_omitted: "UAMOptions()"
+    option_conversion:
+      output_struct_fields:
+        - eval_mode
+        - verbose
+        - objectives
+        - model
+        - sim_config
+    notes:
+      - "Primarily intended for Stage 1."
+      - "SimConfig can be passed through, but sweep output focuses on ACS-side metrics."
+
+  pareto_analysis:
+    signature: "[pareto_J, pareto_designs, knee_idx] = pareto_analysis(designs, F, opt)"
+    default_if_opt_omitted: "UAMOptions()"
+    option_conversion:
+      output_struct_fields:
+        - plot
+        - f_labels
+        - weights
+
+cfg_reference:
+  top_level_groups:
+    - objectives
+    - vars
+    - opt
+    - model
+    - eval
+    - fault
+    - sim
+
+  objectives:
+    stage1:
+      names: [FII, hover, cost]
+      weights: [0.35, 0.40, 0.25]
+      moo_names: [FII, hover, cost]
+    stage2:
+      names: [mission]
+      weights: [1.0]
+
+  vars:
+    fields:
+      names: "Design variable names."
+      lb: "Lower bounds."
+      ub: "Upper bounds."
+      x0: "Baseline values."
+      units: "Reporting units."
+      active: "Logical activation mask."
+
+  opt:
+    fields:
+      method: "cmaes | ga | fmincon | patternsearch"
+      max_evals: "CMA-ES evaluation budget."
+      sigma0: "CMA-ES initial normalized step size."
+      pop_size: "CMA-ES offspring count, 0 = auto."
+      max_iter: "GA/pattern/fmincon generation or iteration budget."
+      ga_pop: "GA and MOO population size."
+      tol_fun: "Convergence tolerance."
+      use_polish: "Run local polish after CMA-ES."
+      verbose: "Print optimizer progress."
+      plot_live: "Show live optimizer figures."
+
+  model:
+    fields:
+      use_vehicle_model: "Enable parameterized mass/inertia model."
+
+  eval:
+    fields:
+      mode: "Default mode used when UAMOptions does not override it."
+
+  fault:
+    fields:
+      include_double: "Include double-fault ACS cases."
+      p_motor: "Per-motor failure probability for PFWAR."
+
+  sim:
+    fields:
+      loe_vec: "Default simulation fault vector."
+      T_end: "Default simulation duration in cfg."
+      fault_time: "Default fault injection time in cfg."
+      dt: "Default simulation timestep."
+      alt_cmd: "Default hover altitude command."
+      scenario: "hover | figure8"
+      mission: "Default figure-8 mission block."
+
+omitted_from_uamoptions_on_purpose:
+  - "Optimizer settings in cfg.opt are not call-level options."
+  - "Design variable settings in cfg.vars are not call-level options."
+  - "run_soo and run_moo do not take UAMOptions; they take cfg."
