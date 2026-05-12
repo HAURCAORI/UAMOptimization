@@ -4,8 +4,15 @@
   "description": "Phase 0 bootstrap for a layered Stage 1 C++ framework for fault-tolerant hexacopter architecture co-design",
   "dependencies": [
     "eigen3",
-    "pagmo2",
+    "glfw3",
+    "glm",
+    "imgui",
     "nlohmann-json",
-    "gtest"
+    "pagmo2",
+    "gtest",
+    "vk-bootstrap",
+    "volk",
+    "vulkan",
+    "vulkan-memory-allocator"
   ]
 }

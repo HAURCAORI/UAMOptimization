@@ -7,7 +7,7 @@ namespace hexaarch::physics {
 
 class VehicleScalingModel {
 public:
-    [[nodiscard]] MassProperties evaluate(const core::HexacopterArchitecture& architecture) const;
+    [[nodiscard]] PhysicalModel evaluate(const core::HexacopterArchitecture& architecture) const;
 };
 
 }  // namespace hexaarch::physics

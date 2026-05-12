@@ -23,6 +23,9 @@
     <Filter Include="소스 파일\analysis">
       <UniqueIdentifier>{d8f3e2c1-4b5a-4f9e-9d7c-123456789006}</UniqueIdentifier>
     </Filter>
+    <Filter Include="소스 파일\visualization">
+      <UniqueIdentifier>{d8f3e2c1-4b5a-4f9e-9d7c-123456789007}</UniqueIdentifier>
+    </Filter>
     <Filter Include="헤더 파일">
       <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
       <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
@@ -42,19 +45,42 @@
     <Filter Include="헤더 파일\physics">
       <UniqueIdentifier>{e9f4f3d2-5c6b-40af-ae8d-234567890105}</UniqueIdentifier>
     </Filter>
+    <Filter Include="헤더 파일\visualization">
+      <UniqueIdentifier>{e9f4f3d2-5c6b-40af-ae8d-234567890106}</UniqueIdentifier>
+    </Filter>
     <Filter Include="리소스 파일">
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="리소스 파일\visualization">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD02}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
     <None Include="vcpkg.json" />
   </ItemGroup>
   <ItemGroup>
+    <CustomBuild Include="visualization\shaders\primitive.frag">
+      <Filter>리소스 파일\visualization</Filter>
+    </CustomBuild>
+    <CustomBuild Include="visualization\shaders\primitive.vert">
+      <Filter>리소스 파일\visualization</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="app\main.cpp">
+      <Filter>소스 파일\app</Filter>
+    </ClCompile>
     <ClCompile Include="app\main_stage1.cpp">
       <Filter>소스 파일\app</Filter>
     </ClCompile>
+    <ClCompile Include="app\main_compare.cpp">
+      <Filter>소스 파일\app</Filter>
+    </ClCompile>
     <ClCompile Include="src\analysis\ComparisonReporter.cpp">
+      <Filter>소스 파일\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\CsvExporter.cpp">
       <Filter>소스 파일\analysis</Filter>
     </ClCompile>
     <ClCompile Include="src\analysis\ParetoAnalyzer.cpp">
@@ -67,6 +93,15 @@
       <Filter>소스 파일\core</Filter>
     </ClCompile>
     <ClCompile Include="src\core\DesignParameter.cpp">
+      <Filter>소스 파일\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\AssemblyState.cpp">
+      <Filter>소스 파일\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\DefaultHexacopterBuilder.cpp">
+      <Filter>소스 파일\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\Elements.cpp">
       <Filter>소스 파일\core</Filter>
     </ClCompile>
     <ClCompile Include="src\core\HexacopterArchitecture.cpp">
@@ -108,16 +143,46 @@
     <ClCompile Include="src\physics\PhysicsTypes.cpp">
       <Filter>소스 파일\physics</Filter>
     </ClCompile>
+    <ClCompile Include="src\physics\PrimitiveDistance.cpp">
+      <Filter>소스 파일\physics</Filter>
+    </ClCompile>
     <ClCompile Include="src\physics\VehicleScalingModel.cpp">
       <Filter>소스 파일\physics</Filter>
+    </ClCompile>
+    <ClCompile Include="visualization\src\visualization\ArchitectureSceneBuilder.cpp">
+      <Filter>소스 파일\visualization</Filter>
+    </ClCompile>
+    <ClCompile Include="visualization\src\visualization\ArchitectureViewerApp.cpp">
+      <Filter>소스 파일\visualization</Filter>
+    </ClCompile>
+    <ClCompile Include="visualization\src\visualization\PrimitiveInstance.cpp">
+      <Filter>소스 파일\visualization</Filter>
+    </ClCompile>
+    <ClCompile Include="visualization\src\visualization\PrimitiveMeshFactory.cpp">
+      <Filter>소스 파일\visualization</Filter>
+    </ClCompile>
+    <ClCompile Include="visualization\src\visualization\ViewerCamera.cpp">
+      <Filter>소스 파일\visualization</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\analysis\ComparisonReporter.hpp">
       <Filter>헤더 파일\analysis</Filter>
     </ClInclude>
+    <ClInclude Include="include\analysis\CsvExporter.hpp">
+      <Filter>헤더 파일\analysis</Filter>
+    </ClInclude>
     <ClInclude Include="include\analysis\ParetoAnalyzer.hpp">
       <Filter>헤더 파일\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="include\core\AssemblyState.hpp">
+      <Filter>헤더 파일\core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\core\Attachment.hpp">
+      <Filter>헤더 파일\core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\core\DefaultHexacopterBuilder.hpp">
+      <Filter>헤더 파일\core</Filter>
     </ClInclude>
     <ClInclude Include="include\core\Constraint.hpp">
       <Filter>헤더 파일\core</Filter>
@@ -128,10 +193,19 @@
     <ClInclude Include="include\core\DesignParameter.hpp">
       <Filter>헤더 파일\core</Filter>
     </ClInclude>
+    <ClInclude Include="include\core\Elements.hpp">
+      <Filter>헤더 파일\core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\core\GeometryPrimitive.hpp">
+      <Filter>헤더 파일\core</Filter>
+    </ClInclude>
     <ClInclude Include="include\core\HexacopterArchitecture.hpp">
       <Filter>헤더 파일\core</Filter>
     </ClInclude>
     <ClInclude Include="include\core\ParameterRegistry.hpp">
+      <Filter>헤더 파일\core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\core\SpatialElement.hpp">
       <Filter>헤더 파일\core</Filter>
     </ClInclude>
     <ClInclude Include="include\evaluation\ArchitectureEvaluator.hpp">
@@ -170,8 +244,26 @@
     <ClInclude Include="include\physics\PhysicsTypes.hpp">
       <Filter>헤더 파일\physics</Filter>
     </ClInclude>
+    <ClInclude Include="include\physics\PrimitiveDistance.hpp">
+      <Filter>헤더 파일\physics</Filter>
+    </ClInclude>
     <ClInclude Include="include\physics\VehicleScalingModel.hpp">
       <Filter>헤더 파일\physics</Filter>
+    </ClInclude>
+    <ClInclude Include="visualization\include\visualization\ArchitectureSceneBuilder.hpp">
+      <Filter>헤더 파일\visualization</Filter>
+    </ClInclude>
+    <ClInclude Include="visualization\include\visualization\ArchitectureViewerApp.hpp">
+      <Filter>헤더 파일\visualization</Filter>
+    </ClInclude>
+    <ClInclude Include="visualization\include\visualization\PrimitiveInstance.hpp">
+      <Filter>헤더 파일\visualization</Filter>
+    </ClInclude>
+    <ClInclude Include="visualization\include\visualization\PrimitiveMeshFactory.hpp">
+      <Filter>헤더 파일\visualization</Filter>
+    </ClInclude>
+    <ClInclude Include="visualization\include\visualization\ViewerCamera.hpp">
+      <Filter>헤더 파일\visualization</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

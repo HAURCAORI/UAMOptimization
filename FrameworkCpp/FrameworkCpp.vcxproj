@@ -22,12 +22,44 @@
     <None Include="vcpkg.json" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="app\main_stage1.cpp" />
+    <CustomBuild Include="visualization\shaders\primitive.frag">
+      <FileType>Document</FileType>
+      <Message>Compiling GLSL shader %(Filename)%(Extension)</Message>
+      <Command>if not exist "$(OutDir)visualization\shaders\compiled" mkdir "$(OutDir)visualization\shaders\compiled"&#x0D;&#x0A;if exist "$(VULKAN_SDK)\Bin\glslc.exe" ("$(VULKAN_SDK)\Bin\glslc.exe" "%(FullPath)" -o "$(OutDir)visualization\shaders\compiled\%(Filename)%(Extension).spv" --target-env=vulkan1.0) else (glslc.exe "%(FullPath)" -o "$(OutDir)visualization\shaders\compiled\%(Filename)%(Extension).spv" --target-env=vulkan1.0)</Command>
+      <AdditionalInputs>%(FullPath)</AdditionalInputs>
+      <Outputs>$(OutDir)visualization\shaders\compiled\%(Filename)%(Extension).spv</Outputs>
+    </CustomBuild>
+    <CustomBuild Include="visualization\shaders\primitive.vert">
+      <FileType>Document</FileType>
+      <Message>Compiling GLSL shader %(Filename)%(Extension)</Message>
+      <Command>if not exist "$(OutDir)visualization\shaders\compiled" mkdir "$(OutDir)visualization\shaders\compiled"&#x0D;&#x0A;if exist "$(VULKAN_SDK)\Bin\glslc.exe" ("$(VULKAN_SDK)\Bin\glslc.exe" "%(FullPath)" -o "$(OutDir)visualization\shaders\compiled\%(Filename)%(Extension).spv" --target-env=vulkan1.0) else (glslc.exe "%(FullPath)" -o "$(OutDir)visualization\shaders\compiled\%(Filename)%(Extension).spv" --target-env=vulkan1.0)</Command>
+      <AdditionalInputs>%(FullPath)</AdditionalInputs>
+      <Outputs>$(OutDir)visualization\shaders\compiled\%(Filename)%(Extension).spv</Outputs>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="app\main.cpp" />
+    <ClCompile Include="app\main_stage1.cpp">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="app\main_compare.cpp">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
+    </ClCompile>
     <ClCompile Include="src\analysis\ComparisonReporter.cpp" />
+    <ClCompile Include="src\analysis\CsvExporter.cpp" />
     <ClCompile Include="src\analysis\ParetoAnalyzer.cpp" />
     <ClCompile Include="src\core\Constraint.cpp" />
     <ClCompile Include="src\core\ConstraintRegistry.cpp" />
     <ClCompile Include="src\core\DesignParameter.cpp" />
+    <ClCompile Include="src\core\AssemblyState.cpp" />
+    <ClCompile Include="src\core\DefaultHexacopterBuilder.cpp" />
+    <ClCompile Include="src\core\Elements.cpp" />
     <ClCompile Include="src\core\HexacopterArchitecture.cpp" />
     <ClCompile Include="src\core\ParameterRegistry.cpp" />
     <ClCompile Include="src\evaluation\ArchitectureEvaluator.cpp" />
@@ -41,16 +73,29 @@
     <ClCompile Include="src\optimization\SooRunner.cpp" />
     <ClCompile Include="src\physics\AllocationMatrixBuilder.cpp" />
     <ClCompile Include="src\physics\PhysicsTypes.cpp" />
+    <ClCompile Include="src\physics\PrimitiveDistance.cpp" />
     <ClCompile Include="src\physics\VehicleScalingModel.cpp" />
+    <ClCompile Include="visualization\src\visualization\ArchitectureSceneBuilder.cpp" />
+    <ClCompile Include="visualization\src\visualization\ArchitectureViewerApp.cpp" />
+    <ClCompile Include="visualization\src\visualization\PrimitiveInstance.cpp" />
+    <ClCompile Include="visualization\src\visualization\PrimitiveMeshFactory.cpp" />
+    <ClCompile Include="visualization\src\visualization\ViewerCamera.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\analysis\ComparisonReporter.hpp" />
+    <ClInclude Include="include\analysis\CsvExporter.hpp" />
     <ClInclude Include="include\analysis\ParetoAnalyzer.hpp" />
+    <ClInclude Include="include\core\AssemblyState.hpp" />
+    <ClInclude Include="include\core\Attachment.hpp" />
     <ClInclude Include="include\core\Constraint.hpp" />
     <ClInclude Include="include\core\ConstraintRegistry.hpp" />
+    <ClInclude Include="include\core\DefaultHexacopterBuilder.hpp" />
     <ClInclude Include="include\core\DesignParameter.hpp" />
+    <ClInclude Include="include\core\Elements.hpp" />
+    <ClInclude Include="include\core\GeometryPrimitive.hpp" />
     <ClInclude Include="include\core\HexacopterArchitecture.hpp" />
     <ClInclude Include="include\core\ParameterRegistry.hpp" />
+    <ClInclude Include="include\core\SpatialElement.hpp" />
     <ClInclude Include="include\evaluation\ArchitectureEvaluator.hpp" />
     <ClInclude Include="include\evaluation\EvaluationContext.hpp" />
     <ClInclude Include="include\evaluation\EvaluationResult.hpp" />
@@ -63,7 +108,13 @@
     <ClInclude Include="include\optimization\SooRunner.hpp" />
     <ClInclude Include="include\physics\AllocationMatrixBuilder.hpp" />
     <ClInclude Include="include\physics\PhysicsTypes.hpp" />
+    <ClInclude Include="include\physics\PrimitiveDistance.hpp" />
     <ClInclude Include="include\physics\VehicleScalingModel.hpp" />
+    <ClInclude Include="visualization\include\visualization\ArchitectureSceneBuilder.hpp" />
+    <ClInclude Include="visualization\include\visualization\ArchitectureViewerApp.hpp" />
+    <ClInclude Include="visualization\include\visualization\PrimitiveInstance.hpp" />
+    <ClInclude Include="visualization\include\visualization\PrimitiveMeshFactory.hpp" />
+    <ClInclude Include="visualization\include\visualization\ViewerCamera.hpp" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
@@ -127,7 +178,8 @@
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)visualization\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include\eigen3;$(ProjectDir)vcpkg_installed\x64-windows\include;$(ProjectDir)vcpkg_installed\x64-windows\include\eigen3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <Optimization>Disabled</Optimization>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -143,7 +195,9 @@
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)visualization\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include\eigen3;$(ProjectDir)vcpkg_installed\x64-windows\include;$(ProjectDir)vcpkg_installed\x64-windows\include\eigen3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- OldStyle (/Z7): debug info in .obj; avoids C1041 when parallel cl.exe contends on vc143.pdb. -->
+      <DebugInformationFormat>OldStyle</DebugInformationFormat>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -154,10 +208,11 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)visualization\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include\eigen3;$(ProjectDir)vcpkg_installed\x64-windows\include;$(ProjectDir)vcpkg_installed\x64-windows\include\eigen3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <Optimization>Disabled</Optimization>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -170,10 +225,12 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)visualization\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include\eigen3;$(ProjectDir)vcpkg_installed\x64-windows\include;$(ProjectDir)vcpkg_installed\x64-windows\include\eigen3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- OldStyle (/Z7): debug info in .obj; avoids C1041 when parallel cl.exe contends on vc143.pdb. -->
+      <DebugInformationFormat>OldStyle</DebugInformationFormat>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>

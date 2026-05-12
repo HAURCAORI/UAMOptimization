@@ -1,5 +1,6 @@
 #include "evaluation/ArchitectureEvaluator.hpp"
 
+#include "core/HexacopterArchitecture.hpp"
 #include "evaluation/Stage1Evaluator.hpp"
 
 namespace hexaarch::evaluation {
@@ -7,7 +8,9 @@ namespace hexaarch::evaluation {
 EvaluationResult ArchitectureEvaluator::evaluate(
     const core::HexacopterArchitecture& architecture,
     const EvaluationContext& context) const {
-    return Stage1Evaluator{}.evaluate(architecture, context);
+    core::HexacopterArchitecture working_copy = architecture;
+    working_copy.updateFromParameters();
+    return Stage1Evaluator{}.evaluate(working_copy, context);
 }
 
 }  // namespace hexaarch::evaluation

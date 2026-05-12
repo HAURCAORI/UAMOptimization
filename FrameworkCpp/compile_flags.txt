@@ -1,0 +1,5 @@
+-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH
+-std=c++20
+-Iinclude
+-Ivcpkg_installed/x64-windows/include
+-Ivcpkg_installed/x64-windows/include/eigen3

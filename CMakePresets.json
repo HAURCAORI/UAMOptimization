@@ -1,0 +1,23 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "clangd-vs",
+      "displayName": "clangd Visual Studio 2022",
+      "generator": "Visual Studio 17 2022",
+      "binaryDir": "${sourceDir}/build/clangd",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "HEXAARCH_ENABLE_LSP_TEST_TARGETS": "ON"
+      },
+      "architecture": {
+        "value": "x64"
+      }
+    }
+  ]
+}

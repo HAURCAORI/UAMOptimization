@@ -1,0 +1,4 @@
+CompileFlags:
+  Add:
+    - -D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH
+    - -IFrameworkCpp/vcpkg_installed/x64-windows/include/eigen3
