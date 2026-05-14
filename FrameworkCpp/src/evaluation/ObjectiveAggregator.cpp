@@ -21,6 +21,7 @@ double ObjectiveAggregator::aggregate(EvaluationResult& result, const Evaluation
     append("hover_nom", result.stage1.hover_nom);
     append("structural", result.stage1.structural);
     append("packaging", result.stage1.packaging);
+    append("structural_safety", result.stage1.structural_safety);
 
     double numerator = 0.0;
     double denominator = 0.0;

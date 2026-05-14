@@ -170,7 +170,7 @@ MeshData PrimitiveMeshFactory::makeUnitDisk(const int radial_segments) {
 }
 
 MeshData PrimitiveMeshFactory::makeUnitSegmentProxy() {
-    return makeUnitBox();
+    return makeUnitCylinder();
 }
 
 }  // namespace hexaarch::visualization

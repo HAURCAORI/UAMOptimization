@@ -57,12 +57,12 @@ pagmo::vector_double::size_type PagmoProblemAdapter::get_nobj() const {
 
 OptimizationProblem PagmoProblemAdapter::problem() const {
     OptimizationProblem problem;
-    problem.lower_bounds = bounds_builder_.lowerBounds(architecture_);
-    problem.upper_bounds = bounds_builder_.upperBounds(architecture_);
     problem.parameter_ids = mapper_.parameterIds(architecture_);
-    problem.parameter_scales.reserve(problem.parameter_ids.size());
     for (const auto* parameter : architecture_.parameters().activeParameters()) {
+        problem.lower_bounds.push_back(parameter->lower_bound);
+        problem.upper_bounds.push_back(parameter->upper_bound);
         problem.parameter_scales.push_back(parameter->scale);
+        problem.parameter_units.push_back(parameter->unit);
     }
     problem.objective_names = use_weighted_sum_ ? std::vector<std::string>{"combined"} : objective_names_;
     return problem;

@@ -92,6 +92,7 @@ nlohmann::json stage1ToJson(const evaluation::Stage1Metrics& m) {
         {"mass", m.mass}, {"power", m.power},
         {"fault_thrust", m.fault_thrust}, {"fault_alloc", m.fault_alloc},
         {"hover_nom", m.hover_nom}, {"structural", m.structural}, {"packaging", m.packaging},
+        {"structural_safety", m.structural_safety},
         {"gamma_worst", m.gamma_worst}, {"sigma_worst", m.sigma_worst},
         {"sigma_reference", m.sigma_reference},
         {"hover_utilization_nominal", m.hover_utilization_nominal},
@@ -110,6 +111,19 @@ nlohmann::json physicalModelToJson(const physics::PhysicalModel& model) {
         }
         alloc.push_back(row);
     }
+    nlohmann::json arm_structural = nlohmann::json::array();
+    for (const auto& arm : model.arm_structural) {
+        arm_structural.push_back({
+            {"arm_id", arm.arm_id},
+            {"L_arm", arm.L_arm},
+            {"M_vertical", arm.M_vertical},
+            {"M_horizontal", arm.M_horizontal},
+            {"M_total", arm.M_total},
+            {"sigma_bending", arm.sigma_bending},
+            {"safety_factor", arm.safety_factor},
+            {"structural_failure", arm.structural_failure}
+        });
+    }
     return {
         {"mass", model.mass_properties.mass},
         {"center_of_mass", {com.x(), com.y(), com.z()}},
@@ -118,6 +132,8 @@ nlohmann::json physicalModelToJson(const physics::PhysicalModel& model) {
         {"overlap_penalty", model.packaging.overlap_penalty},
         {"arm_span", model.structural.arm_span},
         {"normalized_bending_index", model.structural.normalized_bending_index},
+        {"min_safety_factor", model.structural.min_safety_factor},
+        {"arm_structural", arm_structural},
         {"allocation_matrix", alloc}
     };
 }
@@ -144,6 +160,13 @@ nlohmann::json evaluationContextToJson(const evaluation::EvaluationContext& cont
         {"minimum_fault_allocation_ratio", context.minimum_fault_allocation_ratio},
         {"minimum_arm_length", context.minimum_arm_length},
         {"minimum_outer_arm_delta", context.minimum_outer_arm_delta},
+        {"minimum_arm_safety_factor", context.minimum_arm_safety_factor},
+        {"arm_material", {
+            {"name", context.arm_material.name},
+            {"density", context.arm_material.density},
+            {"yield_strength", context.arm_material.yield_strength},
+            {"elastic_modulus", context.arm_material.elastic_modulus}
+        }},
         {"objective_weights", weights}
     };
 }
@@ -270,7 +293,7 @@ bool CsvExporter::writeParetoCsv(
 
     const auto summary = ParetoAnalyzer{}.analyze(result);
 
-    stream << "population_index,is_nondominated,is_knee,feasible,combined_objective,gamma_worst,sigma_worst";
+    stream << "population_index,is_nondominated,is_knee,feasible,combined_objective,gamma_worst,sigma_worst,min_safety_factor";
     for (const auto& name : result.objective_names) {
         stream << ",obj_" << name;
     }
@@ -287,7 +310,8 @@ bool CsvExporter::writeParetoCsv(
                << (point.evaluation.feasible ? "true" : "false") << ','
                << point.evaluation.combined_objective << ','
                << point.evaluation.stage1.gamma_worst << ','
-               << point.evaluation.stage1.sigma_worst;
+               << point.evaluation.stage1.sigma_worst << ','
+               << point.evaluation.physical_model.structural.min_safety_factor;
 
         for (const auto value : point.objective_vector) {
             stream << ',' << value;

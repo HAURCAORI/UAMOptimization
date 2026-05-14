@@ -74,6 +74,7 @@
     <ClCompile Include="src\physics\AllocationMatrixBuilder.cpp" />
     <ClCompile Include="src\physics\PhysicsTypes.cpp" />
     <ClCompile Include="src\physics\PrimitiveDistance.cpp" />
+    <ClCompile Include="src\physics\StructuralAnalyzer.cpp" />
     <ClCompile Include="src\physics\VehicleScalingModel.cpp" />
     <ClCompile Include="visualization\src\visualization\ArchitectureSceneBuilder.cpp" />
     <ClCompile Include="visualization\src\visualization\ArchitectureViewerApp.cpp" />
@@ -85,6 +86,7 @@
     <ClInclude Include="include\analysis\ComparisonReporter.hpp" />
     <ClInclude Include="include\analysis\CsvExporter.hpp" />
     <ClInclude Include="include\analysis\ParetoAnalyzer.hpp" />
+    <ClInclude Include="include\core\AppliedLoad.hpp" />
     <ClInclude Include="include\core\AssemblyState.hpp" />
     <ClInclude Include="include\core\Attachment.hpp" />
     <ClInclude Include="include\core\Constraint.hpp" />
@@ -107,8 +109,10 @@
     <ClInclude Include="include\optimization\PagmoProblemAdapter.hpp" />
     <ClInclude Include="include\optimization\SooRunner.hpp" />
     <ClInclude Include="include\physics\AllocationMatrixBuilder.hpp" />
+    <ClInclude Include="include\physics\Material.hpp" />
     <ClInclude Include="include\physics\PhysicsTypes.hpp" />
     <ClInclude Include="include\physics\PrimitiveDistance.hpp" />
+    <ClInclude Include="include\physics\StructuralAnalyzer.hpp" />
     <ClInclude Include="include\physics\VehicleScalingModel.hpp" />
     <ClInclude Include="visualization\include\visualization\ArchitectureSceneBuilder.hpp" />
     <ClInclude Include="visualization\include\visualization\ArchitectureViewerApp.hpp" />

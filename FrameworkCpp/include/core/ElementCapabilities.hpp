@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/AppliedLoad.hpp"
+
 namespace hexaarch::core {
 
 class IPropulsionRotor {
@@ -14,6 +16,14 @@ public:
     virtual ~IStructuralMember() = default;
     [[nodiscard]] virtual double structuralSpanContribution() const = 0;
     [[nodiscard]] virtual bool contributesToFrameMass() const = 0;
+};
+
+class IStructuralBeam : public IStructuralMember {
+public:
+    [[nodiscard]] virtual double outerRadius() const = 0;
+    [[nodiscard]] virtual double innerRadius() const = 0;
+    [[nodiscard]] virtual double crossSectionArea() const = 0;
+    [[nodiscard]] virtual double secondMomentOfArea() const = 0;
 };
 
 class IMotorMassContributor {

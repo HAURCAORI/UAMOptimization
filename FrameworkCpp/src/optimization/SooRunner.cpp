@@ -25,19 +25,33 @@ SooRunResult SooRunner::run(
     };
     pagmo::problem problem{adapter};
 
-    pagmo::algorithm algorithm = [&]() {
+    const bool use_callback = static_cast<bool>(config.on_generation);
+
+    auto makeAlgorithm = [&](unsigned gen_count, bool memory) {
         if (config.algorithm_name == "cmaes") {
             return pagmo::algorithm{
-                pagmo::cmaes{config.generations, -1.0, -1.0, -1.0, -1.0, 0.5, config.ftol, config.ftol, false, true, config.seed}
+                pagmo::cmaes{gen_count, -1.0, -1.0, -1.0, -1.0, 0.5, config.ftol, config.ftol, memory, true, config.seed}
             };
         }
         throw std::invalid_argument("Unsupported SOO algorithm: " + config.algorithm_name);
-    }();
-    algorithm.set_verbosity(std::max(1U, config.generations / 10U));
+    };
 
-    pagmo::population population{problem, static_cast<pagmo::population::size_type>(config.population_size), config.seed};
-    const auto evolved = algorithm.evolve(population);
-    const auto best_x = evolved.champion_x();
+    pagmo::population pop{problem, static_cast<pagmo::population::size_type>(config.population_size), config.seed};
+
+    if (use_callback) {
+        pagmo::algorithm alg = makeAlgorithm(1U, true);
+        alg.set_verbosity(std::max(1U, config.generations / 10U));
+        for (unsigned gen = 0U; gen < config.generations; ++gen) {
+            pop = alg.evolve(pop);
+            config.on_generation(gen + 1U, config.generations, pop.champion_x());
+        }
+    } else {
+        pagmo::algorithm alg = makeAlgorithm(config.generations, false);
+        alg.set_verbosity(std::max(1U, config.generations / 10U));
+        pop = alg.evolve(pop);
+    }
+
+    const auto best_x = pop.champion_x();
 
     SooRunResult result;
     result.algorithm_name = config.algorithm_name;
@@ -53,7 +67,7 @@ SooRunResult SooRunner::run(
     result.best_result = adapter.evaluate(best_x);
     result.best_decision_vector.assign(best_x.begin(), best_x.end());
 
-    const auto xs = evolved.get_x();
+    const auto xs = pop.get_x();
     double best_feasible_objective = std::numeric_limits<double>::infinity();
     for (const auto& x : xs) {
         const auto evaluation = adapter.evaluate(x);

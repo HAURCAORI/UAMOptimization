@@ -281,6 +281,8 @@ void HexacopterArchitecture::registerDefaultParameters() {
     parameters_.add({"cT", id_, "-", "Moment to thrust ratio", kBaselineCT, 0.01, 0.08, kBaselineCT, false, 1.0});
     parameters_.add({"d_prop", id_, "m", "Propeller diameter", kBaselinePropDiameter, 0.20, 1.20, kBaselinePropDiameter, false, 1.0});
     parameters_.add({"m_payload", id_, "kg", "Payload mass", kBaselinePayload, 1000.0, 2500.0, kBaselinePayload, false, 1.0});
+    parameters_.add({"arm_outer_radius", id_, "m", "Arm tube outer radius", 0.08, 0.02, 0.15, 0.08, true, 1.0});
+    parameters_.add({"arm_wall_thickness", id_, "m", "Arm tube wall thickness", 0.005, 0.001, 0.020, 0.005, true, 1.0});
 }
 
 void HexacopterArchitecture::registerDefaultConstraints() {
@@ -366,6 +368,21 @@ void HexacopterArchitecture::registerDefaultConstraints() {
             return constraint.evaluate(ratio);
         }
     });
+    constraints_.add({
+        "arm_yield_failure",
+        id_,
+        ConstraintSense::greater_equal,
+        1.5,
+        true,
+        true,
+        2000.0,
+        [](const ConstraintEvaluationContext& context) {
+            const double min_sf = context.physical_model.structural.min_safety_factor;
+            const double threshold = context.evaluation_context.minimum_arm_safety_factor;
+            Constraint constraint{"arm_yield_failure", context.architecture.id(), ConstraintSense::greater_equal, threshold};
+            return constraint.evaluate(min_sf);
+        }
+    });
 }
 
 void HexacopterArchitecture::registerElementConstraints() {
@@ -382,6 +399,8 @@ void HexacopterArchitecture::bindCanonicalParameters() {
     cT_parameter_ = parameters_.find(id_ + "::cT");
     dprop_parameter_ = parameters_.find(id_ + "::d_prop");
     payload_parameter_ = parameters_.find(id_ + "::m_payload");
+    r_o_parameter_ = parameters_.find(id_ + "::arm_outer_radius");
+    t_wall_parameter_ = parameters_.find(id_ + "::arm_wall_thickness");
 }
 
 void HexacopterArchitecture::rebuildElements() {
@@ -392,7 +411,9 @@ void HexacopterArchitecture::rebuildElements() {
         Tmax_parameter_,
         cT_parameter_,
         dprop_parameter_,
-        payload_parameter_
+        payload_parameter_,
+        r_o_parameter_,
+        t_wall_parameter_
     });
 
     for (auto& element : elements_) {
@@ -409,7 +430,9 @@ void HexacopterArchitecture::rebuildAttachments() {
         Tmax_parameter_,
         cT_parameter_,
         dprop_parameter_,
-        payload_parameter_
+        payload_parameter_,
+        r_o_parameter_,
+        t_wall_parameter_
     });
 }
 

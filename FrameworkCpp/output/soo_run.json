@@ -1,0 +1,1198 @@
+{
+  "algorithm_name": "cmaes",
+  "baseline": {
+    "combined_objective": 0.6687388077202794,
+    "constraints": [
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "default-architecture::parameter_bounds",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "default-architecture::minimum_geometry_margin",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "default-architecture::rotor_clearance",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "default-architecture::failed_hover_gamma",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "default-architecture::fault_allocation_ratio",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": false,
+        "hard": true,
+        "id": "default-architecture::arm_yield_failure",
+        "violation": 0.3781938994191283
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "body::body_span_order",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "battery::battery_sizing_inputs",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "payload::payload_mass_nonnegative",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "arm_1::arm_length_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "motor_1::motor_thrust_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "rotor_1::rotor_diameter_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "arm_2::arm_length_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "motor_2::motor_thrust_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "rotor_2::rotor_diameter_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "arm_3::arm_length_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "motor_3::motor_thrust_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "rotor_3::rotor_diameter_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "arm_4::arm_length_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "motor_4::motor_thrust_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "rotor_4::rotor_diameter_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "arm_5::arm_length_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "motor_5::motor_thrust_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "rotor_5::rotor_diameter_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "arm_6::arm_length_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "motor_6::motor_thrust_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "rotor_6::rotor_diameter_positive",
+        "violation": 0.0
+      }
+    ],
+    "feasible": false,
+    "message": "Stage 1 evaluation detected infeasible constraints",
+    "objectives": [
+      {
+        "name": "mass",
+        "value": 1.015516118771367,
+        "weight": 0.2
+      },
+      {
+        "name": "power",
+        "value": 1.0361108399049996,
+        "weight": 0.2
+      },
+      {
+        "name": "fault_thrust",
+        "value": 0.0,
+        "weight": 0.25
+      },
+      {
+        "name": "fault_alloc",
+        "value": 0.9471432816660319,
+        "weight": 0.25
+      },
+      {
+        "name": "hover_nom",
+        "value": 0.21627595568497995,
+        "weight": 0.1
+      }
+    ],
+    "physical_model": {
+      "allocation_matrix": [
+        [
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0
+        ],
+        [
+          -2.650000000000001,
+          2.650000000000001,
+          -5.5,
+          5.5,
+          -2.65,
+          2.65
+        ],
+        [
+          2.65,
+          2.65,
+          1.2212453270876722e-15,
+          1.2212453270876722e-15,
+          -2.6500000000000017,
+          -2.6500000000000017
+        ],
+        [
+          -0.03,
+          -0.03,
+          0.03,
+          0.03,
+          -0.03,
+          0.03
+        ]
+      ],
+      "arm_span": 25.990663761154806,
+      "arm_structural": [
+        {
+          "L_arm": 3.747665940288702,
+          "M_horizontal": 240.0,
+          "M_total": 27953.978484274296,
+          "M_vertical": 27952.94820048988,
+          "arm_id": "arm_1",
+          "safety_factor": 1.64630781742044,
+          "sigma_bending": 305532170.0337538,
+          "structural_failure": false
+        },
+        {
+          "L_arm": 3.747665940288702,
+          "M_horizontal": 240.0,
+          "M_total": 27953.978484274296,
+          "M_vertical": 27952.94820048988,
+          "arm_id": "arm_2",
+          "safety_factor": 1.64630781742044,
+          "sigma_bending": 305532170.0337538,
+          "structural_failure": false
+        },
+        {
+          "L_arm": 5.5,
+          "M_horizontal": 240.0,
+          "M_total": 41023.89288383611,
+          "M_vertical": 41023.19084791502,
+          "arm_id": "arm_3",
+          "safety_factor": 1.1218061005808717,
+          "sigma_bending": 448384083.2560515,
+          "structural_failure": true
+        },
+        {
+          "L_arm": 5.5,
+          "M_horizontal": 240.0,
+          "M_total": 41023.89288383611,
+          "M_vertical": 41023.19084791502,
+          "arm_id": "arm_4",
+          "safety_factor": 1.1218061005808717,
+          "sigma_bending": 448384083.2560515,
+          "structural_failure": true
+        },
+        {
+          "L_arm": 3.747665940288702,
+          "M_horizontal": 240.0,
+          "M_total": 27953.978484274296,
+          "M_vertical": 27952.94820048988,
+          "arm_id": "arm_5",
+          "safety_factor": 1.64630781742044,
+          "sigma_bending": 305532170.0337538,
+          "structural_failure": false
+        },
+        {
+          "L_arm": 3.747665940288702,
+          "M_horizontal": 240.0,
+          "M_total": 27953.978484274296,
+          "M_vertical": 27952.94820048988,
+          "arm_id": "arm_6",
+          "safety_factor": 1.64630781742044,
+          "sigma_bending": 305532170.0337538,
+          "structural_failure": false
+        }
+      ],
+      "center_of_mass": [
+        -2.4980656115484307e-17,
+        0.0,
+        -0.16479913121069184
+      ],
+      "inertia_diagonal": [
+        12093.750006000002,
+        9973.936816666666,
+        21880.186816666668
+      ],
+      "mass": 2275.4974328145654,
+      "min_safety_factor": 1.1218061005808717,
+      "minimum_clearance": 3.4716577444580077,
+      "normalized_bending_index": 0.8599381701107089,
+      "overlap_penalty": 0.0
+    },
+    "stage1": {
+      "fault_alloc": 0.9471432816660319,
+      "fault_thrust": 0.0,
+      "gamma_worst": 1.7919035673605634,
+      "hover_nom": 0.21627595568497995,
+      "hover_ok_nominal": true,
+      "hover_utilization_nominal": 1.0,
+      "mass": 1.015516118771367,
+      "packaging": 0.0,
+      "power": 1.0361108399049996,
+      "sigma_reference": 0.11029841218539427,
+      "sigma_worst": 0.11645377665708462,
+      "structural": 0.8599381701107089,
+      "structural_safety": 1.337129472930571
+    }
+  },
+  "baseline_decision_vector": [
+    0.4125,
+    0.4125,
+    0.46153846153846156,
+    -0.08410161249999999,
+    0.4615384615384615,
+    0.2105263157894737
+  ],
+  "baseline_parameters": {
+    "default-architecture::Lx": 2.65,
+    "default-architecture::Lyi": 2.65,
+    "default-architecture::Lyo": 5.5,
+    "default-architecture::T_max": 7327.1871,
+    "default-architecture::arm_outer_radius": 0.08,
+    "default-architecture::arm_wall_thickness": 0.005
+  },
+  "best_decision_vector": [
+    0.374745091281377,
+    0.07586452046284581,
+    0.0,
+    0.4429614715192284,
+    0.6797053293468963,
+    0.6233851913715623
+  ],
+  "best_feasible_decision_vector": [
+    0.32963499239692384,
+    0.14127567212935987,
+    0.0006418448810970737,
+    0.44278298920139475,
+    0.6293095222561909,
+    0.4144327700275391
+  ],
+  "best_feasible_parameters": {
+    "default-architecture::Lx": 2.3185399695876954,
+    "default-architecture::Lyi": 1.5651026885174395,
+    "default-architecture::Lyo": 2.504171991727131,
+    "default-architecture::T_max": 11542.263913611157,
+    "default-architecture::arm_outer_radius": 0.10181023789330482,
+    "default-architecture::arm_wall_thickness": 0.008874222630523242
+  },
+  "best_feasible_result": {
+    "combined_objective": 0.5987747518284936,
+    "constraints": [
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "default-architecture::parameter_bounds",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "default-architecture::minimum_geometry_margin",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "default-architecture::rotor_clearance",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "default-architecture::failed_hover_gamma",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "default-architecture::fault_allocation_ratio",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "default-architecture::arm_yield_failure",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "body::body_span_order",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "battery::battery_sizing_inputs",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "payload::payload_mass_nonnegative",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "arm_1::arm_length_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "motor_1::motor_thrust_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "rotor_1::rotor_diameter_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "arm_2::arm_length_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "motor_2::motor_thrust_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "rotor_2::rotor_diameter_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "arm_3::arm_length_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "motor_3::motor_thrust_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "rotor_3::rotor_diameter_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "arm_4::arm_length_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "motor_4::motor_thrust_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "rotor_4::rotor_diameter_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "arm_5::arm_length_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "motor_5::motor_thrust_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "rotor_5::rotor_diameter_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "arm_6::arm_length_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "motor_6::motor_thrust_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "rotor_6::rotor_diameter_positive",
+        "violation": 0.0
+      }
+    ],
+    "feasible": true,
+    "message": "Stage 1 evaluation completed",
+    "objectives": [
+      {
+        "name": "mass",
+        "value": 1.0404407544135605,
+        "weight": 0.2
+      },
+      {
+        "name": "power",
+        "value": 1.1082433634406441,
+        "weight": 0.2
+      },
+      {
+        "name": "fault_thrust",
+        "value": 0.0,
+        "weight": 0.25
+      },
+      {
+        "name": "fault_alloc",
+        "value": 0.6325275333961352,
+        "weight": 0.25
+      },
+      {
+        "name": "hover_nom",
+        "value": 0.10906044908618745,
+        "weight": 0.1
+      }
+    ],
+    "physical_model": {
+      "allocation_matrix": [
+        [
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0
+        ],
+        [
+          -1.9780260382740458,
+          1.9780260382740458,
+          -2.504171991727131,
+          2.504171991727131,
+          -1.978026038274045,
+          1.978026038274045
+        ],
+        [
+          1.978026038274045,
+          1.978026038274045,
+          5.560378805673796e-16,
+          5.560378805673796e-16,
+          -1.9780260382740464,
+          -1.9780260382740464
+        ],
+        [
+          -0.03,
+          -0.03,
+          0.03,
+          0.03,
+          -0.03,
+          0.03
+        ]
+      ],
+      "arm_span": 16.19774898367137,
+      "arm_structural": [
+        {
+          "L_arm": 2.7973512500542776,
+          "M_horizontal": 346.2679174083347,
+          "M_total": 29689.830221169515,
+          "M_vertical": 29687.81091780336,
+          "arm_id": "arm_1",
+          "safety_factor": 4.2920741303227485,
+          "sigma_bending": 117192756.86465746,
+          "structural_failure": false
+        },
+        {
+          "L_arm": 2.7973512500542776,
+          "M_horizontal": 346.2679174083347,
+          "M_total": 29689.830221169515,
+          "M_vertical": 29687.81091780336,
+          "arm_id": "arm_2",
+          "safety_factor": 4.2920741303227485,
+          "sigma_bending": 117192756.86465746,
+          "structural_failure": false
+        },
+        {
+          "L_arm": 2.504171991727131,
+          "M_horizontal": 346.2679174083347,
+          "M_total": 26578.60523284715,
+          "M_vertical": 26576.349535873123,
+          "arm_id": "arm_3",
+          "safety_factor": 4.794493582698265,
+          "sigma_bending": 104912018.61551341,
+          "structural_failure": false
+        },
+        {
+          "L_arm": 2.504171991727131,
+          "M_horizontal": 346.2679174083347,
+          "M_total": 26578.60523284715,
+          "M_vertical": 26576.349535873123,
+          "arm_id": "arm_4",
+          "safety_factor": 4.794493582698265,
+          "sigma_bending": 104912018.61551341,
+          "structural_failure": false
+        },
+        {
+          "L_arm": 2.7973512500542776,
+          "M_horizontal": 346.2679174083347,
+          "M_total": 29689.830221169515,
+          "M_vertical": 29687.81091780336,
+          "arm_id": "arm_5",
+          "safety_factor": 4.2920741303227485,
+          "sigma_bending": 117192756.86465746,
+          "structural_failure": false
+        },
+        {
+          "L_arm": 2.7973512500542776,
+          "M_horizontal": 346.2679174083347,
+          "M_total": 29689.830221169515,
+          "M_vertical": 29687.81091780336,
+          "arm_id": "arm_6",
+          "safety_factor": 4.2920741303227485,
+          "sigma_bending": 117192756.86465746,
+          "structural_failure": false
+        }
+      ],
+      "center_of_mass": [
+        -7.314667029856265e-17,
+        0.0,
+        -0.16085122905273402
+      ],
+      "inertia_diagonal": [
+        12093.750006,
+        9600.467879178957,
+        21506.71787917896
+      ],
+      "mass": 2331.3468116370977,
+      "min_safety_factor": 4.2920741303227485,
+      "minimum_clearance": 1.6268064325737224,
+      "normalized_bending_index": 0.7732243697075651,
+      "overlap_penalty": 0.0
+    },
+    "stage1": {
+      "fault_alloc": 0.6325275333961352,
+      "fault_thrust": 0.0,
+      "gamma_worst": 2.5233942732658843,
+      "hover_nom": 0.10906044908618745,
+      "hover_ok_nominal": true,
+      "hover_utilization_nominal": 0.49536452279500376,
+      "mass": 1.0404407544135605,
+      "packaging": 0.0,
+      "power": 1.1082433634406441,
+      "sigma_reference": 0.11029841218539427,
+      "sigma_worst": 0.1743772505730866,
+      "structural": 0.7732243697075651,
+      "structural_safety": 0.34948138230017134
+    }
+  },
+  "best_parameters": {
+    "default-architecture::Lx": 2.498980365125508,
+    "default-architecture::Lyi": 1.3034580818513832,
+    "default-architecture::Lyo": 2.5,
+    "default-architecture::T_max": 11543.691772153827,
+    "default-architecture::arm_outer_radius": 0.10836169281509653,
+    "default-architecture::arm_wall_thickness": 0.012844318636059684
+  },
+  "best_result": {
+    "combined_objective": 0.5978232723011419,
+    "constraints": [
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "default-architecture::parameter_bounds",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "default-architecture::minimum_geometry_margin",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "default-architecture::rotor_clearance",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "default-architecture::failed_hover_gamma",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "default-architecture::fault_allocation_ratio",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "default-architecture::arm_yield_failure",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "body::body_span_order",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "battery::battery_sizing_inputs",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "payload::payload_mass_nonnegative",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "arm_1::arm_length_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "motor_1::motor_thrust_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "rotor_1::rotor_diameter_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "arm_2::arm_length_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "motor_2::motor_thrust_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "rotor_2::rotor_diameter_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "arm_3::arm_length_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "motor_3::motor_thrust_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "rotor_3::rotor_diameter_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "arm_4::arm_length_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "motor_4::motor_thrust_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "rotor_4::rotor_diameter_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "arm_5::arm_length_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "motor_5::motor_thrust_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "rotor_5::rotor_diameter_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "arm_6::arm_length_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "motor_6::motor_thrust_positive",
+        "violation": 0.0
+      },
+      {
+        "active": true,
+        "feasible": true,
+        "hard": true,
+        "id": "rotor_6::rotor_diameter_positive",
+        "violation": 0.0
+      }
+    ],
+    "feasible": true,
+    "message": "Stage 1 evaluation completed",
+    "objectives": [
+      {
+        "name": "mass",
+        "value": 1.039426431673624,
+        "weight": 0.2
+      },
+      {
+        "name": "power",
+        "value": 1.1066231235262538,
+        "weight": 0.2
+      },
+      {
+        "name": "fault_thrust",
+        "value": 0.0,
+        "weight": 0.25
+      },
+      {
+        "name": "fault_alloc",
+        "value": 0.6309250523242775,
+        "weight": 0.25
+      },
+      {
+        "name": "hover_nom",
+        "value": 0.10882098180096843,
+        "weight": 0.1
+      }
+    ],
+    "physical_model": {
+      "allocation_matrix": [
+        [
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0
+        ],
+        [
+          -1.9929758950406937,
+          1.9929758950406937,
+          -2.5,
+          2.5,
+          -1.992975895040693,
+          1.992975895040693
+        ],
+        [
+          1.992975895040693,
+          1.992975895040693,
+          5.551115123125783e-16,
+          5.551115123125783e-16,
+          -1.9929758950406944,
+          -1.9929758950406944
+        ],
+        [
+          -0.03,
+          -0.03,
+          0.03,
+          0.03,
+          -0.03,
+          0.03
+        ]
+      ],
+      "arm_span": 16.273974160996826,
+      "arm_structural": [
+        {
+          "L_arm": 2.8184935402492064,
+          "M_horizontal": 346.31075316461477,
+          "M_total": 29912.50187786961,
+          "M_vertical": 29910.49711147903,
+          "arm_id": "arm_1",
+          "safety_factor": 6.659607297990109,
+          "sigma_bending": 75529979.09528494,
+          "structural_failure": false
+        },
+        {
+          "L_arm": 2.8184935402492064,
+          "M_horizontal": 346.31075316461477,
+          "M_total": 29912.50187786961,
+          "M_vertical": 29910.49711147903,
+          "arm_id": "arm_2",
+          "safety_factor": 6.659607297990109,
+          "sigma_bending": 75529979.09528494,
+          "structural_failure": false
+        },
+        {
+          "L_arm": 2.5,
+          "M_horizontal": 346.31075316461477,
+          "M_total": 26532.831075569127,
+          "M_vertical": 26530.570927647397,
+          "arm_id": "arm_3",
+          "safety_factor": 7.507887689769659,
+          "sigma_bending": 66996207.29348336,
+          "structural_failure": false
+        },
+        {
+          "L_arm": 2.5,
+          "M_horizontal": 346.31075316461477,
+          "M_total": 26532.831075569127,
+          "M_vertical": 26530.570927647397,
+          "arm_id": "arm_4",
+          "safety_factor": 7.507887689769659,
+          "sigma_bending": 66996207.29348336,
+          "structural_failure": false
+        },
+        {
+          "L_arm": 2.8184935402492064,
+          "M_horizontal": 346.31075316461477,
+          "M_total": 29912.50187786961,
+          "M_vertical": 29910.49711147903,
+          "arm_id": "arm_5",
+          "safety_factor": 6.659607297990109,
+          "sigma_bending": 75529979.09528494,
+          "structural_failure": false
+        },
+        {
+          "L_arm": 2.8184935402492064,
+          "M_horizontal": 346.31075316461477,
+          "M_total": 29912.50187786961,
+          "M_vertical": 29910.49711147903,
+          "arm_id": "arm_6",
+          "safety_factor": 6.659607297990109,
+          "sigma_bending": 75529979.09528494,
+          "structural_failure": false
+        }
+      ],
+      "center_of_mass": [
+        -7.321805036816029e-17,
+        0.0,
+        -0.16100819548576215
+      ],
+      "inertia_diagonal": [
+        12093.750005999998,
+        9600.081845999437,
+        21506.331845999437
+      ],
+      "mass": 2329.0739882440394,
+      "min_safety_factor": 6.659607297990109,
+      "minimum_clearance": 1.6364596668116387,
+      "normalized_bending_index": 0.7769591987399987,
+      "overlap_penalty": 0.0
+    },
+    "stage1": {
+      "fault_alloc": 0.6309250523242775,
+      "fault_thrust": 0.0,
+      "gamma_worst": 2.5261691899127796,
+      "hover_nom": 0.10882098180096843,
+      "hover_ok_nominal": true,
+      "hover_utilization_nominal": 0.49482038059499833,
+      "mass": 1.039426431673624,
+      "packaging": 0.0,
+      "power": 1.1066231235262538,
+      "sigma_reference": 0.11029841218539427,
+      "sigma_worst": 0.17482014984040295,
+      "structural": 0.7769591987399987,
+      "structural_safety": 0.22523850624836464
+    }
+  },
+  "evaluation_context": {
+    "arm_material": {
+      "density": 2810.0,
+      "elastic_modulus": 71700000000.0,
+      "name": "Al7075",
+      "yield_strength": 503000000.0
+    },
+    "gamma_thrust_required": 1.5,
+    "minimum_arm_length": 0.5,
+    "minimum_arm_safety_factor": 1.5,
+    "minimum_fault_allocation_ratio": 0.05,
+    "minimum_outer_arm_delta": 0.1,
+    "objective_weights": [
+      {
+        "name": "mass",
+        "weight": 0.2
+      },
+      {
+        "name": "power",
+        "weight": 0.2
+      },
+      {
+        "name": "fault_thrust",
+        "weight": 0.25
+      },
+      {
+        "name": "fault_alloc",
+        "weight": 0.25
+      },
+      {
+        "name": "hover_nom",
+        "weight": 0.1
+      },
+      {
+        "name": "structural",
+        "weight": 0.0
+      },
+      {
+        "name": "packaging",
+        "weight": 0.0
+      },
+      {
+        "name": "structural_safety",
+        "weight": 0.0
+      }
+    ]
+  },
+  "ftol": 1e-06,
+  "generated": "2026-05-13 20:39:06",
+  "generations": 40,
+  "has_feasible_solution": true,
+  "objective_name": "combined",
+  "population_size": 24,
+  "problem": {
+    "lower_bounds": [
+      1.0,
+      1.0,
+      2.5,
+      8000.0,
+      0.02,
+      0.001
+    ],
+    "objective_names": [
+      "combined"
+    ],
+    "parameter_ids": [
+      "default-architecture::Lx",
+      "default-architecture::Lyi",
+      "default-architecture::Lyo",
+      "default-architecture::T_max",
+      "default-architecture::arm_outer_radius",
+      "default-architecture::arm_wall_thickness"
+    ],
+    "parameter_scales": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "upper_bounds": [
+      5.0,
+      5.0,
+      9.0,
+      16000.0,
+      0.15,
+      0.02
+    ]
+  },
+  "seed": 42
+}

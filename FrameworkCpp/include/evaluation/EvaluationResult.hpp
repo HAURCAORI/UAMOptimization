@@ -31,6 +31,7 @@ struct Stage1Metrics {
     double hover_nom = 0.0;
     double structural = 0.0;
     double packaging = 0.0;
+    double structural_safety = 0.0;
     double gamma_worst = 0.0;
     double sigma_worst = 0.0;
     double sigma_reference = 0.0;

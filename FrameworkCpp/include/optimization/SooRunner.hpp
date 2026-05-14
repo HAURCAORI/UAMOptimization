@@ -23,6 +23,7 @@ struct SooRunConfig {
     unsigned generations = 40U;
     unsigned seed = 42U;
     double ftol = 1e-6;
+    GenerationCallback on_generation;
 };
 
 struct SooRunResult {

@@ -91,6 +91,8 @@ private:
     DesignParameter* cT_parameter_ = nullptr;
     DesignParameter* dprop_parameter_ = nullptr;
     DesignParameter* payload_parameter_ = nullptr;
+    DesignParameter* r_o_parameter_ = nullptr;
+    DesignParameter* t_wall_parameter_ = nullptr;
 };
 
 }  // namespace hexaarch::core

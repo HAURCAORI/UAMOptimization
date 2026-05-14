@@ -1,6 +1,8 @@
 #pragma once
 
 #include <array>
+#include <string>
+#include <vector>
 
 #include "eigen3/Eigen/Dense"
 
@@ -24,6 +26,17 @@ struct PropulsionProperties {
     double gravity = 9.81;
 };
 
+struct ArmStructuralResult {
+    std::string arm_id;
+    double L_arm = 0.0;
+    double M_vertical = 0.0;
+    double M_horizontal = 0.0;
+    double M_total = 0.0;
+    double sigma_bending = 0.0;
+    double safety_factor = 0.0;
+    bool structural_failure = false;
+};
+
 struct StructuralProxy {
     double arm_span = 0.0;
     double max_arm_length = 0.0;
@@ -31,6 +44,7 @@ struct StructuralProxy {
     double motor_mass = 0.0;
     double bending_index = 0.0;
     double normalized_bending_index = 0.0;
+    double min_safety_factor = 0.0;
 };
 
 struct PackagingReport {
@@ -53,6 +67,7 @@ struct PhysicalModel {
     double frame_mass = 0.0;
     double body_inertia_x = 0.0;
     double body_inertia_y = 0.0;
+    std::vector<ArmStructuralResult> arm_structural;
 };
 
 }  // namespace hexaarch::physics

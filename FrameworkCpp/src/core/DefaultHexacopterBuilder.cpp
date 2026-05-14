@@ -49,7 +49,7 @@ std::vector<SpatialElementPtr> DefaultHexacopterBuilder::buildElements(const Def
 
     for (int index = 0; index < 6; ++index) {
         elements.push_back(std::make_unique<ArmElement>(
-            "arm_" + std::to_string(index + 1), index, parameters.Lx, parameters.Lyi, parameters.Lyo, parameters.Tmax));
+            "arm_" + std::to_string(index + 1), index, parameters.Lx, parameters.Lyi, parameters.Lyo, parameters.r_o, parameters.t_wall));
         elements.push_back(std::make_unique<MotorElement>(
             "motor_" + std::to_string(index + 1), index, parameters.Tmax));
         elements.push_back(std::make_unique<RotorElement>(

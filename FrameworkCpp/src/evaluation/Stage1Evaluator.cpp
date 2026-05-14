@@ -10,6 +10,7 @@
 
 #include "evaluation/ObjectiveAggregator.hpp"
 #include "physics/AllocationMatrixBuilder.hpp"
+#include "physics/StructuralAnalyzer.hpp"
 #include "physics/VehicleScalingModel.hpp"
 
 namespace hexaarch::evaluation {
@@ -179,6 +180,8 @@ EvaluationResult Stage1Evaluator::evaluate(
     physics::VehicleScalingModel model_builder;
     result.physical_model = model_builder.evaluate(architecture);
 
+    physics::StructuralAnalyzer{}.analyze(result.physical_model, architecture, context);
+
     static const physics::PhysicalModel s_reference_model = []() {
         return physics::VehicleScalingModel{}.evaluate(core::HexacopterArchitecture{});
     }();
@@ -260,6 +263,10 @@ EvaluationResult Stage1Evaluator::evaluate(
     result.stage1.fault_alloc = sigma_reference / std::max(sigma_worst, 1e-9);
     result.stage1.structural = result.physical_model.structural.normalized_bending_index;
     result.stage1.packaging = result.physical_model.packaging.overlap_penalty;
+    {
+        const double min_sf = result.physical_model.structural.min_safety_factor;
+        result.stage1.structural_safety = context.minimum_arm_safety_factor / std::max(min_sf, 1e-9);
+    }
 
     result.constraint_results.clear();
     const core::ConstraintEvaluationContext constraint_context{

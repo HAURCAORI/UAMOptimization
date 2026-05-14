@@ -1,0 +1,4 @@
+label,feasible,objective,mass,power,fault_thrust,fault_alloc,hover_nom,structural,packaging,structural_safety,min_safety_factor,hard_constraint_violated,worst_violation_constraint,worst_violation
+baseline,false,0.668739,1.015516,1.036111,0.000000,0.947143,0.216276,0.859938,0.000000,1.337129,1.121806,true,default-architecture::arm_yield_failure,0.378194
+raw_best,true,0.597823,1.039426,1.106623,0.000000,0.630925,0.108821,0.776959,0.000000,0.225239,6.659607,false,,0.000000
+best_feasible,true,0.598775,1.040441,1.108243,0.000000,0.632528,0.109060,0.773224,0.000000,0.349481,4.292074,false,,0.000000

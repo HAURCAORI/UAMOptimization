@@ -4,6 +4,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <mutex>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -32,6 +33,12 @@
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
 #include <volk.h>
+#if __has_include(<imgui.h>) && __has_include(<imgui_impl_glfw.h>) && __has_include(<imgui_impl_vulkan.h>)
+#define HEXAARCH_HAS_IMGUI 1
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_vulkan.h>
+#endif
 #if defined(_WIN32)
 #include <Windows.h>
 #endif
@@ -203,8 +210,11 @@ Eigen::Matrix4f modelMatrixForInstance(const PrimitiveInstance& instance) {
     }
     case core::GeometryPrimitive::Kind::segment: {
         const double length = instance.dimensions.x() + 2.0 * padding;
+        const double diameter = padding > 1e-6 ? 2.0 * padding : static_cast<double>(kSegmentThickness);
         primitive_transform.translate(Eigen::Vector3d(0.5 * length, 0.0, 0.0));
-        scale = {length, kSegmentThickness, kSegmentThickness};
+        // Rotate the unit cylinder (axis along Y) to align with the arm (axis along X).
+        primitive_transform.rotate(Eigen::AngleAxisd(-1.5707963267948966, Eigen::Vector3d::UnitZ()));
+        scale = {diameter, length, diameter};
         break;
     }
     }
@@ -702,12 +712,35 @@ struct ArchitectureViewerApp::Impl {
 
     bool fillmode_nonsolid_supported = false;
     VkPipeline wireframe_pipeline = VK_NULL_HANDLE;
+    VkSampleCountFlagBits msaa_samples = VK_SAMPLE_COUNT_4_BIT;
+    VkImage msaa_color_image = VK_NULL_HANDLE;
+    VkDeviceMemory msaa_color_memory = VK_NULL_HANDLE;
+    VkImageView msaa_color_view = VK_NULL_HANDLE;
     VkCommandPool transfer_pool = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT debug_messenger = VK_NULL_HANDLE;
 
     bool first_mouse = true;
     double last_cursor_x = 0.0;
     double last_cursor_y = 0.0;
+
+    bool ui_show_axes = true;
+    bool ui_show_grid = true;
+    bool ui_show_labels = true;
+    bool ui_wireframe = false;
+    std::unordered_map<std::string, bool> element_visibility;
+
+#ifdef HEXAARCH_HAS_IMGUI
+    VkDescriptorPool imgui_pool = VK_NULL_HANDLE;
+    float ui_dpi_scale = 1.0f;
+    float ui_scale = 1.0f;       // committed scale — drives panel size and style
+    float ui_scale_drag = 1.0f;  // live slider value during drag; diverges from ui_scale
+    ImGuiStyle imgui_style_base{};
+#endif
+
+    std::mutex pending_mutex;
+    std::optional<core::HexacopterArchitecture> pending_arch;
+    std::string pending_title;
+    std::optional<core::HexacopterArchitecture> owned_arch;
 
     [[nodiscard]] fs::path compiledShaderPath(const std::string_view source_name) const {
         return shader_root / "compiled" / (std::string(source_name) + ".spv");
@@ -722,9 +755,11 @@ struct ArchitectureViewerApp::Impl {
 
     static void scrollCallback(GLFWwindow* window, double, double yoffset) {
         auto* impl = static_cast<Impl*>(glfwGetWindowUserPointer(window));
-        if (impl != nullptr) {
-            impl->camera.zoom(-yoffset * kZoomSpeed * std::max(impl->camera.distance(), 1.0));
-        }
+        if (impl == nullptr) { return; }
+#ifdef HEXAARCH_HAS_IMGUI
+        if (ImGui::GetIO().WantCaptureMouse) { return; }
+#endif
+        impl->camera.zoom(-yoffset * kZoomSpeed * std::max(impl->camera.distance(), 1.0));
     }
 };
 
@@ -739,11 +774,38 @@ VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     return VK_FALSE;
 }
 
+void initializeImGui(ArchitectureViewerApp::Impl& impl);
+void cleanupImGui(ArchitectureViewerApp::Impl& impl);
+
+VkSampleCountFlagBits pickMsaaSamples(const VkPhysicalDevice device) {
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(device, &props);
+    const VkSampleCountFlags counts =
+        props.limits.framebufferColorSampleCounts & props.limits.framebufferDepthSampleCounts;
+    for (const auto s : {VK_SAMPLE_COUNT_4_BIT, VK_SAMPLE_COUNT_2_BIT}) {
+        if (counts & s) { return s; }
+    }
+    return VK_SAMPLE_COUNT_1_BIT;
+}
+
 void destroySwapchainResources(ArchitectureViewerApp::Impl& impl) {
     for (auto framebuffer : impl.swapchain_framebuffers) {
         vkDestroyFramebuffer(impl.device, framebuffer, nullptr);
     }
     impl.swapchain_framebuffers.clear();
+
+    if (impl.msaa_color_view != VK_NULL_HANDLE) {
+        vkDestroyImageView(impl.device, impl.msaa_color_view, nullptr);
+        impl.msaa_color_view = VK_NULL_HANDLE;
+    }
+    if (impl.msaa_color_image != VK_NULL_HANDLE) {
+        vkDestroyImage(impl.device, impl.msaa_color_image, nullptr);
+        impl.msaa_color_image = VK_NULL_HANDLE;
+    }
+    if (impl.msaa_color_memory != VK_NULL_HANDLE) {
+        vkFreeMemory(impl.device, impl.msaa_color_memory, nullptr);
+        impl.msaa_color_memory = VK_NULL_HANDLE;
+    }
 
     if (impl.depth_image_view != VK_NULL_HANDLE) {
         vkDestroyImageView(impl.device, impl.depth_image_view, nullptr);
@@ -865,20 +927,68 @@ void createSwapchainImageViews(ArchitectureViewerApp::Impl& impl) {
     }
 }
 
+void createColorResources(ArchitectureViewerApp::Impl& impl) {
+    if (impl.msaa_samples == VK_SAMPLE_COUNT_1_BIT) { return; }
+
+    VkImageCreateInfo image_info{};
+    image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image_info.imageType = VK_IMAGE_TYPE_2D;
+    image_info.extent.width = impl.swapchain_extent.width;
+    image_info.extent.height = impl.swapchain_extent.height;
+    image_info.extent.depth = 1;
+    image_info.mipLevels = 1;
+    image_info.arrayLayers = 1;
+    image_info.format = impl.swapchain_format;
+    image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    image_info.usage = VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    image_info.samples = impl.msaa_samples;
+    image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateImage(impl.device, &image_info, nullptr, &impl.msaa_color_image) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create MSAA color image.");
+    }
+
+    VkMemoryRequirements mem_reqs{};
+    vkGetImageMemoryRequirements(impl.device, impl.msaa_color_image, &mem_reqs);
+    VkMemoryAllocateInfo alloc_info{};
+    alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc_info.allocationSize = mem_reqs.size;
+    alloc_info.memoryTypeIndex = findMemoryType(
+        impl.physical_device, mem_reqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (vkAllocateMemory(impl.device, &alloc_info, nullptr, &impl.msaa_color_memory) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate MSAA color memory.");
+    }
+    vkBindImageMemory(impl.device, impl.msaa_color_image, impl.msaa_color_memory, 0);
+
+    VkImageViewCreateInfo view_info{};
+    view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view_info.image = impl.msaa_color_image;
+    view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view_info.format = impl.swapchain_format;
+    view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    view_info.subresourceRange.levelCount = 1;
+    view_info.subresourceRange.layerCount = 1;
+    if (vkCreateImageView(impl.device, &view_info, nullptr, &impl.msaa_color_view) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create MSAA color image view.");
+    }
+}
+
 void createRenderPass(ArchitectureViewerApp::Impl& impl) {
+    const bool msaa = impl.msaa_samples != VK_SAMPLE_COUNT_1_BIT;
+
     VkAttachmentDescription color_attachment{};
     color_attachment.format = impl.swapchain_format;
-    color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    color_attachment.samples = msaa ? impl.msaa_samples : VK_SAMPLE_COUNT_1_BIT;
     color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    color_attachment.storeOp = msaa ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE;
     color_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     color_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    color_attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    color_attachment.finalLayout = msaa ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
     VkAttachmentDescription depth_attachment{};
     depth_attachment.format = impl.depth_format;
-    depth_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    depth_attachment.samples = msaa ? impl.msaa_samples : VK_SAMPLE_COUNT_1_BIT;
     depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     depth_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -894,11 +1004,16 @@ void createRenderPass(ArchitectureViewerApp::Impl& impl) {
     depth_reference.attachment = 1;
     depth_reference.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
+    VkAttachmentReference resolve_reference{};
+    resolve_reference.attachment = 2;
+    resolve_reference.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &color_reference;
     subpass.pDepthStencilAttachment = &depth_reference;
+    if (msaa) { subpass.pResolveAttachments = &resolve_reference; }
 
     VkSubpassDependency dependency{};
     dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
@@ -910,7 +1025,21 @@ void createRenderPass(ArchitectureViewerApp::Impl& impl) {
     dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
         | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
-    std::array<VkAttachmentDescription, 2> attachments{color_attachment, depth_attachment};
+    VkAttachmentDescription resolve_attachment{};
+    if (msaa) {
+        resolve_attachment.format = impl.swapchain_format;
+        resolve_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        resolve_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        resolve_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        resolve_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        resolve_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        resolve_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        resolve_attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    }
+
+    std::vector<VkAttachmentDescription> attachments{color_attachment, depth_attachment};
+    if (msaa) { attachments.push_back(resolve_attachment); }
+
     VkRenderPassCreateInfo render_pass_info{};
     render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
     render_pass_info.attachmentCount = static_cast<std::uint32_t>(attachments.size());
@@ -1001,7 +1130,7 @@ void createGraphicsPipeline(ArchitectureViewerApp::Impl& impl) {
 
     VkPipelineMultisampleStateCreateInfo multisampling{};
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisampling.rasterizationSamples = impl.msaa_samples;
 
     VkPipelineDepthStencilStateCreateInfo depth_stencil{};
     depth_stencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
@@ -1091,7 +1220,7 @@ void createDepthResources(ArchitectureViewerApp::Impl& impl) {
     image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
     image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     image_info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-    image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+    image_info.samples = impl.msaa_samples;
     image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     if (vkCreateImage(impl.device, &image_info, nullptr, &impl.depth_image) != VK_SUCCESS) {
@@ -1129,11 +1258,15 @@ void createDepthResources(ArchitectureViewerApp::Impl& impl) {
 }
 
 void createFramebuffers(ArchitectureViewerApp::Impl& impl) {
+    const bool msaa = impl.msaa_samples != VK_SAMPLE_COUNT_1_BIT;
     impl.swapchain_framebuffers.resize(impl.swapchain_image_views.size());
     for (std::size_t index = 0; index < impl.swapchain_image_views.size(); ++index) {
-        const std::array<VkImageView, 2> attachments{
-            impl.swapchain_image_views[index],
-            impl.depth_image_view};
+        std::vector<VkImageView> attachments;
+        if (msaa) {
+            attachments = {impl.msaa_color_view, impl.depth_image_view, impl.swapchain_image_views[index]};
+        } else {
+            attachments = {impl.swapchain_image_views[index], impl.depth_image_view};
+        }
 
         VkFramebufferCreateInfo framebuffer_info{};
         framebuffer_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -1393,9 +1526,11 @@ void recordCommandBuffer(
         throw std::runtime_error("Failed to begin command buffer.");
     }
 
-    std::array<VkClearValue, 2> clear_values{};
+    std::array<VkClearValue, 3> clear_values{};
     clear_values[0].color = {{0.93f, 0.95f, 0.98f, 1.0f}};
     clear_values[1].depthStencil = {1.0f, 0};
+    clear_values[2].color = {{0.93f, 0.95f, 0.98f, 1.0f}};
+    const std::uint32_t clear_count = (impl.msaa_samples != VK_SAMPLE_COUNT_1_BIT) ? 3U : 2U;
 
     VkRenderPassBeginInfo render_pass_info{};
     render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1403,7 +1538,7 @@ void recordCommandBuffer(
     render_pass_info.framebuffer = impl.swapchain_framebuffers[image_index];
     render_pass_info.renderArea.offset = {0, 0};
     render_pass_info.renderArea.extent = impl.swapchain_extent;
-    render_pass_info.clearValueCount = static_cast<std::uint32_t>(clear_values.size());
+    render_pass_info.clearValueCount = clear_count;
     render_pass_info.pClearValues = clear_values.data();
 
     vkCmdBeginRenderPass(command_buffer, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
@@ -1429,7 +1564,7 @@ void recordCommandBuffer(
         }
 
         const VkPipeline active_pipeline =
-            (instance.wireframe && impl.wireframe_pipeline != VK_NULL_HANDLE)
+            ((instance.wireframe || impl.ui_wireframe) && impl.wireframe_pipeline != VK_NULL_HANDLE)
                 ? impl.wireframe_pipeline
                 : impl.graphics_pipeline;
         if (active_pipeline != bound_pipeline) {
@@ -1459,6 +1594,10 @@ void recordCommandBuffer(
         vkCmdDrawIndexed(command_buffer, mesh.index_count, 1, 0, 0, 0);
     }
 
+#ifdef HEXAARCH_HAS_IMGUI
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), command_buffer);
+#endif
+
     vkCmdEndRenderPass(command_buffer);
     if (vkEndCommandBuffer(command_buffer) != VK_SUCCESS) {
         throw std::runtime_error("Failed to record command buffer.");
@@ -1478,6 +1617,7 @@ void recreateSwapchain(ArchitectureViewerApp::Impl& impl) {
     destroySwapchainResources(impl);
     createSwapchain(impl);
     createSwapchainImageViews(impl);
+    createColorResources(impl);
     createRenderPass(impl);
     createGraphicsPipeline(impl);
     createDepthResources(impl);
@@ -1505,6 +1645,9 @@ void updateInput(ArchitectureViewerApp::Impl& impl) {
     impl.last_cursor_x = cursor_x;
     impl.last_cursor_y = cursor_y;
 
+#ifdef HEXAARCH_HAS_IMGUI
+    if (ImGui::GetIO().WantCaptureMouse) { return; }
+#endif
     if (glfwGetMouseButton(impl.window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
         impl.camera.orbit(-delta_x * kOrbitSpeed, -delta_y * kOrbitSpeed);
     }
@@ -1588,6 +1731,7 @@ void drawFrame(ArchitectureViewerApp::Impl& impl) {
 void cleanupViewer(ArchitectureViewerApp::Impl& impl) {
     if (impl.device != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(impl.device);
+        cleanupImGui(impl);
         cleanupMeshes(impl);
         destroySwapchainResources(impl);
     }
@@ -1752,6 +1896,7 @@ void pickPhysicalDevice(ArchitectureViewerApp::Impl& impl) {
             VkPhysicalDeviceFeatures features{};
             vkGetPhysicalDeviceFeatures(device, &features);
             impl.fillmode_nonsolid_supported = features.fillModeNonSolid == VK_TRUE;
+            impl.msaa_samples = pickMsaaSamples(device);
             return;
         }
     }
@@ -1819,6 +1964,7 @@ void initViewerRuntime(ArchitectureViewerApp::Impl& impl) {
     createDescriptorPoolAndSets(impl);
     createSwapchain(impl);
     createSwapchainImageViews(impl);
+    createColorResources(impl);
     createRenderPass(impl);
     createGraphicsPipeline(impl);
     createDepthResources(impl);
@@ -1826,11 +1972,306 @@ void initViewerRuntime(ArchitectureViewerApp::Impl& impl) {
     createPerImagePresentSemaphores(impl);
     createMeshes(impl);
     initializeSceneCamera(impl);
+    initializeImGui(impl);
+}
+
+void applyVisibilityFlags(ArchitectureViewerApp::Impl& impl) {
+    for (auto& instance : impl.instances) {
+        if (instance.source_element_type == "ReferenceAxis") {
+            instance.visible = impl.ui_show_axes;
+        } else if (instance.source_element_type == "ReferenceGrid") {
+            instance.visible = impl.ui_show_grid;
+        } else {
+            const auto it = impl.element_visibility.find(instance.source_element_id);
+            instance.visible = (it == impl.element_visibility.end()) || it->second;
+        }
+    }
+}
+
+void initializeImGui(ArchitectureViewerApp::Impl& impl) {
+#ifdef HEXAARCH_HAS_IMGUI
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::StyleColorsDark();
+    ImGui::GetStyle().WindowRounding = 6.0f;
+    ImGui::GetStyle().Alpha = 0.92f;
+
+    // Detect Windows content scale (DPI). glfwGetWindowContentScale returns
+    // e.g. 1.5 on a 150% display — use it to size fonts and widgets correctly.
+    {
+        float xscale = 1.0f;
+        glfwGetWindowContentScale(impl.window, &xscale, nullptr);
+        impl.ui_dpi_scale = (xscale > 0.0f) ? xscale : 1.0f;
+    }
+    impl.ui_scale = 1.0f;
+
+    // Store the pristine (pre-scale) style so the runtime slider can re-apply cleanly.
+    impl.imgui_style_base = ImGui::GetStyle();
+
+    // Load the default font at native DPI resolution for crisp text.
+    {
+        ImFontConfig cfg;
+        cfg.SizePixels = std::max(8.0f, std::round(13.0f * impl.ui_dpi_scale));
+        ImGui::GetIO().Fonts->AddFontDefault(&cfg);
+    }
+
+    // Scale widget sizes to DPI; FontGlobalScale stays at 1.0 because the font
+    // is already loaded at the right pixel size above.
+    ImGui::GetStyle().ScaleAllSizes(impl.ui_dpi_scale);
+
+    VkDescriptorPoolSize pool_sizes[] = {
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16}
+    };
+    VkDescriptorPoolCreateInfo pool_info{};
+    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    pool_info.maxSets = 16;
+    pool_info.poolSizeCount = 1;
+    pool_info.pPoolSizes = pool_sizes;
+    if (vkCreateDescriptorPool(impl.device, &pool_info, nullptr, &impl.imgui_pool) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create ImGui descriptor pool.");
+    }
+
+    ImGui_ImplGlfw_InitForVulkan(impl.window, true);
+
+    ImGui_ImplVulkan_InitInfo init_info{};
+    init_info.ApiVersion = VK_API_VERSION_1_0;
+    init_info.Instance = impl.instance;
+    init_info.PhysicalDevice = impl.physical_device;
+    init_info.Device = impl.device;
+    init_info.QueueFamily = impl.queue_families.graphics_family.value();
+    init_info.Queue = impl.graphics_queue;
+    init_info.DescriptorPool = impl.imgui_pool;
+    init_info.MinImageCount = 2;
+    init_info.ImageCount = static_cast<std::uint32_t>(impl.swapchain_images.size());
+    init_info.PipelineInfoMain.RenderPass = impl.render_pass;
+    init_info.PipelineInfoMain.MSAASamples = impl.msaa_samples;
+
+    // volk uses VK_NO_PROTOTYPES; the vcpkg imgui build links against Vulkan::Vulkan
+    // (vulkan-1.dll), so its internal function pointers may be null. Provide
+    // volk-backed dispatch before Init to avoid the null-ptr access violation.
+    ImGui_ImplVulkan_LoadFunctions(VK_API_VERSION_1_0,
+        [](const char* fn_name, void* ud) -> PFN_vkVoidFunction {
+            auto& impl_ref = *static_cast<ArchitectureViewerApp::Impl*>(ud);
+            if (PFN_vkVoidFunction fn = vkGetDeviceProcAddr(impl_ref.device, fn_name)) {
+                return fn;
+            }
+            return vkGetInstanceProcAddr(impl_ref.instance, fn_name);
+        },
+        &impl
+    );
+    ImGui_ImplVulkan_Init(&init_info);
+#else
+    (void)impl;
+#endif
+}
+
+void cleanupImGui(ArchitectureViewerApp::Impl& impl) {
+#ifdef HEXAARCH_HAS_IMGUI
+    ImGui_ImplVulkan_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+    if (impl.device != VK_NULL_HANDLE && impl.imgui_pool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(impl.device, impl.imgui_pool, nullptr);
+        impl.imgui_pool = VK_NULL_HANDLE;
+    }
+#else
+    (void)impl;
+#endif
+}
+
+void renderUiPanel(ArchitectureViewerApp::Impl& impl) {
+#ifdef HEXAARCH_HAS_IMGUI
+    const float eff_scale = impl.ui_dpi_scale * impl.ui_scale;
+    const float panel_w = std::round(220.0f * eff_scale);
+    const float W = static_cast<float>(impl.swapchain_extent.width);
+    ImGui::SetNextWindowPos(ImVec2(W - panel_w - 10.0f, 10.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(panel_w, 0.0f), ImGuiCond_Always);
+    ImGui::Begin("View Options", nullptr,
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+
+    bool changed = false;
+    changed |= ImGui::Checkbox("Reference Axes", &impl.ui_show_axes);
+    changed |= ImGui::Checkbox("Reference Grid", &impl.ui_show_grid);
+    ImGui::Separator();
+    ImGui::Checkbox("Labels", &impl.ui_show_labels);
+    ImGui::Separator();
+    ImGui::Checkbox("Wireframe", &impl.ui_wireframe);
+    if (changed) { applyVisibilityFlags(impl); }
+
+    ImGui::Separator();
+    ImGui::SetNextItemWidth(panel_w - std::round(20.0f * eff_scale));
+    ImGui::SliderFloat("##scale", &impl.ui_scale_drag, 0.5f, 3.0f, "Scale %.2f");
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        // Commit the drag value and apply the style rescale once on mouse release.
+        impl.ui_scale = std::max(0.5f, std::min(3.0f, impl.ui_scale_drag));
+        impl.ui_scale_drag = impl.ui_scale;
+        const float new_eff = impl.ui_dpi_scale * impl.ui_scale;
+        ImGui::GetStyle() = impl.imgui_style_base;
+        ImGui::GetStyle().ScaleAllSizes(new_eff);
+        ImGui::GetIO().FontGlobalScale = impl.ui_scale;
+    }
+
+    ImGui::End();
+#else
+    (void)impl;
+#endif
+}
+
+void renderElementListPanel(ArchitectureViewerApp::Impl& impl) {
+#ifdef HEXAARCH_HAS_IMGUI
+    if (!impl.owned_arch.has_value()) { return; }
+    const auto& assembled = impl.owned_arch->assemblyState().elements;
+
+    const float eff_scale = impl.ui_dpi_scale * impl.ui_scale;
+    const float panel_w = std::round(460.0f * eff_scale);
+    const float panel_h = std::round(340.0f * eff_scale);
+    ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(panel_w, panel_h), ImGuiCond_Always);
+    ImGui::Begin("Elements", nullptr,
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+
+    const float table_h = panel_h - std::round(60.0f * eff_scale);
+    const float col_vis_w  = std::round(26.0f * eff_scale);
+    const float col_mass_w = std::round(58.0f * eff_scale);
+    bool vis_changed = false;
+    if (ImGui::BeginTable("##elems", 5,
+            ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg,
+            ImVec2(0.0f, table_h))) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("##vis",  ImGuiTableColumnFlags_WidthFixed,   col_vis_w);
+        ImGui::TableSetupColumn("ID",     ImGuiTableColumnFlags_WidthStretch, 1.2f);
+        ImGui::TableSetupColumn("Type",   ImGuiTableColumnFlags_WidthStretch, 0.8f);
+        ImGui::TableSetupColumn("Mass",   ImGuiTableColumnFlags_WidthFixed,   col_mass_w);
+        ImGui::TableSetupColumn("Pos(m)", ImGuiTableColumnFlags_WidthStretch, 1.5f);
+        ImGui::TableHeadersRow();
+
+        for (const auto& ae : assembled) {
+            if (ae.element == nullptr) { continue; }
+            const std::string& etype = ae.element->type();
+            if (etype == "ReferenceAxis" || etype == "ReferenceGrid") { continue; }
+
+            const std::string& eid = ae.element->id();
+            const bool has_suffix = etype.size() > 7 &&
+                etype.compare(etype.size() - 7, 7, "Element") == 0;
+            const std::string short_type = has_suffix ? etype.substr(0, etype.size() - 7) : etype;
+            const Eigen::Vector3d pos = ae.world_pose.translation();
+
+            ImGui::TableNextRow();
+
+            ImGui::TableSetColumnIndex(0);
+            const auto vis_it = impl.element_visibility.find(eid);
+            bool vis = (vis_it == impl.element_visibility.end()) || vis_it->second;
+            ImGui::PushID(eid.c_str());
+            if (ImGui::Checkbox("##v", &vis)) {
+                impl.element_visibility[eid] = vis;
+                vis_changed = true;
+            }
+            ImGui::PopID();
+
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextUnformatted(eid.c_str());
+            ImGui::TableSetColumnIndex(2);
+            ImGui::TextUnformatted(short_type.c_str());
+            ImGui::TableSetColumnIndex(3);
+            ImGui::Text("%.2f", ae.element->mass());
+            ImGui::TableSetColumnIndex(4);
+            ImGui::Text("%.1f,%.1f,%.1f", pos.x(), pos.y(), pos.z());
+        }
+
+        ImGui::EndTable();
+    }
+    if (vis_changed) { applyVisibilityFlags(impl); }
+
+    ImGui::Text("%zu elements", assembled.size());
+    ImGui::End();
+#else
+    (void)impl;
+#endif
+}
+
+void renderLabels(ArchitectureViewerApp::Impl& impl) {
+#ifdef HEXAARCH_HAS_IMGUI
+    if (!impl.ui_show_labels) { return; }
+
+    const Eigen::Matrix4f vp = impl.camera.projectionMatrix() * impl.camera.viewMatrix();
+    const float W = static_cast<float>(impl.swapchain_extent.width);
+    const float H = static_cast<float>(impl.swapchain_extent.height);
+
+    std::map<std::string, Eigen::Vector3d> label_positions;
+    for (const auto& inst : impl.instances) {
+        if (inst.source_element_type == "ReferenceAxis" || inst.source_element_type == "ReferenceGrid") {
+            continue;
+        }
+        if (!inst.source_element_id.empty() && label_positions.count(inst.source_element_id) == 0U) {
+            label_positions[inst.source_element_id] = inst.world_transform.translation();
+        }
+    }
+
+    ImDrawList* draw_list = ImGui::GetForegroundDrawList();
+    for (const auto& [id, world_pos] : label_positions) {
+        const Eigen::Vector4f clip = vp * Eigen::Vector4f(
+            static_cast<float>(world_pos.x()),
+            static_cast<float>(world_pos.y()),
+            static_cast<float>(world_pos.z()),
+            1.0f);
+        if (clip.w() <= 0.0f) { continue; }
+        const float ndc_z = clip.z() / clip.w();
+        if (ndc_z < 0.0f || ndc_z > 1.0f) { continue; }
+        const float sx = (clip.x() / clip.w() + 1.0f) * 0.5f * W;
+        const float sy = (clip.y() / clip.w() + 1.0f) * 0.5f * H;
+        draw_list->AddText(ImVec2(sx + 2.0f, sy - 8.0f), IM_COL32(20, 20, 20, 210), id.c_str());
+    }
+#else
+    (void)impl;
+#endif
+}
+
+void processPendingUpdates(ArchitectureViewerApp::Impl& impl) {
+    std::optional<core::HexacopterArchitecture> new_arch;
+    std::string new_title;
+    {
+        std::lock_guard<std::mutex> lock(impl.pending_mutex);
+        new_arch = std::move(impl.pending_arch);
+        impl.pending_arch.reset();
+        new_title = std::move(impl.pending_title);
+        impl.pending_title.clear();
+    }
+    if (new_arch.has_value()) {
+        impl.owned_arch = std::move(new_arch);
+        // Rebuild visibility map, preserving any existing per-element states.
+        std::unordered_map<std::string, bool> new_vis;
+        for (const auto& ae : impl.owned_arch->assemblyState().elements) {
+            if (ae.element == nullptr) { continue; }
+            const std::string& eid = ae.element->id();
+            const auto it = impl.element_visibility.find(eid);
+            new_vis[eid] = (it != impl.element_visibility.end()) ? it->second : true;
+        }
+        impl.element_visibility = std::move(new_vis);
+        ArchitectureSceneBuilder scene_builder;
+        impl.instances = scene_builder.build(*impl.owned_arch);
+        appendSpatialReferences(impl.instances);
+        applyVisibilityFlags(impl);
+    }
+    if (!new_title.empty() && impl.window != nullptr) {
+        glfwSetWindowTitle(impl.window, new_title.c_str());
+    }
 }
 
 void runViewerLoop(ArchitectureViewerApp::Impl& impl) {
+    applyVisibilityFlags(impl);
     while (!glfwWindowShouldClose(impl.window)) {
+        processPendingUpdates(impl);
         updateInput(impl);
+#ifdef HEXAARCH_HAS_IMGUI
+        ImGui_ImplVulkan_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+        renderUiPanel(impl);
+        renderElementListPanel(impl);
+        renderLabels(impl);
+        ImGui::Render();
+#endif
         drawFrame(impl);
     }
     vkDeviceWaitIdle(impl.device);
@@ -1865,6 +2306,14 @@ ArchitectureViewerApp::~ArchitectureViewerApp() = default;
 
 void ArchitectureViewerApp::setArchitecture(const core::HexacopterArchitecture& architecture) {
     architecture_ = &architecture;
+}
+
+void ArchitectureViewerApp::postArchitecture(core::HexacopterArchitecture architecture, std::string title) {
+    std::lock_guard<std::mutex> lock(impl_->pending_mutex);
+    impl_->pending_arch = std::move(architecture);
+    if (!title.empty()) {
+        impl_->pending_title = std::move(title);
+    }
 }
 
 int ArchitectureViewerApp::run() {

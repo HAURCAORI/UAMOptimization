@@ -17,6 +17,7 @@ struct MooRunConfig {
     unsigned population_size = 32U;
     unsigned generations = 60U;
     unsigned seed = 42U;
+    GenerationCallback on_generation;
 };
 
 struct MooPoint {

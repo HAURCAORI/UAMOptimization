@@ -87,9 +87,10 @@ private:
     DesignParameter* propeller_diameter_;
 };
 
-class ArmElement final : public BasicSpatialElement, public IStructuralMember {
+class ArmElement final : public BasicSpatialElement, public IStructuralBeam, public ILoadReceiver {
 public:
-    ArmElement(std::string id, int index, DesignParameter* Lx, DesignParameter* Lyi, DesignParameter* Lyo, DesignParameter* Tmax);
+    ArmElement(std::string id, int index, DesignParameter* Lx, DesignParameter* Lyi, DesignParameter* Lyo,
+               DesignParameter* r_o, DesignParameter* t_wall);
     [[nodiscard]] std::unique_ptr<SpatialElement> clone() const override;
     void registerParameters(ParameterRegistry& registry) override;
     void rebindParameters(ParameterRegistry& registry) override;
@@ -98,13 +99,26 @@ public:
     [[nodiscard]] int index() const;
     [[nodiscard]] double structuralSpanContribution() const override;
     [[nodiscard]] bool contributesToFrameMass() const override;
+    [[nodiscard]] double outerRadius() const override;
+    [[nodiscard]] double innerRadius() const override;
+    [[nodiscard]] double crossSectionArea() const override;
+    [[nodiscard]] double secondMomentOfArea() const override;
+    void clearLoads() override;
+    void addLoad(const AppliedLoad& load) override;
+    [[nodiscard]] const std::vector<AppliedLoad>& loads() const override;
 
 private:
     int index_;
     DesignParameter* Lx_;
     DesignParameter* Lyi_;
     DesignParameter* Lyo_;
-    DesignParameter* Tmax_;
+    DesignParameter* r_o_;
+    DesignParameter* t_wall_;
+    double r_o_val_ = 0.08;
+    double r_i_val_ = 0.075;
+    double cross_section_area_ = 0.0;
+    double second_moment_of_area_ = 0.0;
+    std::vector<AppliedLoad> loads_;
 };
 
 class MotorElement final : public BasicSpatialElement, public IMotorMassContributor {

@@ -1,0 +1,5 @@
+# algorithm=cmaes seed=42 gen=40 generated=2026-05-13 20:39:06
+label,Lx,Lyi,Lyo,T_max,arm_outer_radius,arm_wall_thickness
+baseline,2.65,2.65,5.5,7327.19,0.08,0.005
+raw_best,2.49898,1.30346,2.5,11543.7,0.108362,0.0128443
+best_feasible,2.31854,1.5651,2.50417,11542.3,0.10181,0.00887422

@@ -25,6 +25,7 @@ public:
     ArchitectureViewerApp& operator=(const ArchitectureViewerApp&) = delete;
 
     void setArchitecture(const core::HexacopterArchitecture& architecture);
+    void postArchitecture(core::HexacopterArchitecture architecture, std::string title = {});
     [[nodiscard]] int run();
     [[nodiscard]] const ViewerCamera& camera() const;
 

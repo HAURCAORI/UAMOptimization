@@ -15,6 +15,8 @@ struct DefaultHexacopterParameters {
     DesignParameter* cT = nullptr;
     DesignParameter* dprop = nullptr;
     DesignParameter* payload = nullptr;
+    DesignParameter* r_o = nullptr;
+    DesignParameter* t_wall = nullptr;
 };
 
 class DefaultHexacopterBuilder {

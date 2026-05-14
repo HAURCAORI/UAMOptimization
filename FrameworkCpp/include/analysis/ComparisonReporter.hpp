@@ -20,6 +20,8 @@ public:
     [[nodiscard]] static std::string summarize(const optimization::MooRunResult& result);
     [[nodiscard]] static std::string summaryTable(
         const std::vector<std::pair<std::string, evaluation::EvaluationResult>>& labeled_results);
+    [[nodiscard]] static std::string parametersTable(const optimization::SooRunResult& result);
+    [[nodiscard]] static std::string parametersTable(const optimization::MooRunResult& result);
 };
 
 }  // namespace hexaarch::analysis

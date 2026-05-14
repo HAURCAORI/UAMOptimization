@@ -1,6 +1,8 @@
 #include "optimization/MooRunner.hpp"
 
 #include <algorithm>
+#include <iostream>
+#include <limits>
 #include <stdexcept>
 
 #include "pagmo/algorithm.hpp"
@@ -26,20 +28,47 @@ MooRunResult MooRunner::run(
         throw std::invalid_argument("NSGA-II population_size must be a multiple of 4.");
     }
 
-    pagmo::algorithm algorithm = [&]() {
+    const bool use_callback = static_cast<bool>(config.on_generation);
+    const auto variable_count = std::max<std::size_t>(DesignVectorMapper{}.pack(architecture).size(), 1U);
+    const auto mutation_rate = 1.0 / static_cast<double>(variable_count);
+
+    auto makeAlgorithm = [&](unsigned gen_count) {
         if (config.algorithm_name == "nsga2") {
-            const auto variable_count = std::max<std::size_t>(DesignVectorMapper{}.pack(architecture).size(), 1U);
-            const auto mutation_rate = 1.0 / static_cast<double>(variable_count);
             return pagmo::algorithm{
-                pagmo::nsga2{config.generations, 0.95, 10.0, mutation_rate, 50.0, config.seed}
+                pagmo::nsga2{gen_count, 0.95, 10.0, mutation_rate, 50.0, config.seed}
             };
         }
         throw std::invalid_argument("Unsupported MOO algorithm: " + config.algorithm_name);
-    }();
-    algorithm.set_verbosity(std::max(1U, config.generations / 10U));
+    };
 
-    pagmo::population population{problem, static_cast<pagmo::population::size_type>(config.population_size), config.seed};
-    const auto evolved = algorithm.evolve(population);
+    pagmo::population pop{problem, static_cast<pagmo::population::size_type>(config.population_size), config.seed};
+
+    if (use_callback) {
+        pagmo::algorithm alg = makeAlgorithm(1U);
+        const unsigned log_interval = std::max(1U, config.generations / 10U);
+        for (unsigned gen = 0U; gen < config.generations; ++gen) {
+            pop = alg.evolve(pop);
+            const auto& fs = pop.get_f();
+            const auto& xs = pop.get_x();
+            std::size_t best_idx = 0U;
+            double best_sum = std::numeric_limits<double>::max();
+            for (std::size_t i = 0U; i < fs.size(); ++i) {
+                double sum = 0.0;
+                for (const double f : fs[i]) { sum += f; }
+                if (sum < best_sum) { best_sum = sum; best_idx = i; }
+            }
+            if ((gen + 1U) % log_interval == 0U || gen + 1U == config.generations) {
+                std::cout << "Gen:\t" << (gen + 1U) << "\tBest obj sum:\t" << best_sum << '\n';
+            }
+            config.on_generation(gen + 1U, config.generations, xs[best_idx]);
+        }
+    } else {
+        pagmo::algorithm alg = makeAlgorithm(config.generations);
+        alg.set_verbosity(std::max(1U, config.generations / 10U));
+        pop = alg.evolve(pop);
+    }
+
+    const auto evolved = pop;
 
     MooRunResult result;
     result.algorithm_name = config.algorithm_name;

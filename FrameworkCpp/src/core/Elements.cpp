@@ -297,13 +297,15 @@ ArmElement::ArmElement(
     DesignParameter* Lx,
     DesignParameter* Lyi,
     DesignParameter* Lyo,
-    DesignParameter* Tmax)
+    DesignParameter* r_o,
+    DesignParameter* t_wall)
     : BasicSpatialElement(std::move(id), "ArmElement"),
       index_(index),
       Lx_(Lx),
       Lyi_(Lyi),
       Lyo_(Lyo),
-      Tmax_(Tmax) {}
+      r_o_(r_o),
+      t_wall_(t_wall) {}
 
 std::unique_ptr<SpatialElement> ArmElement::clone() const {
     return std::make_unique<ArmElement>(*this);
@@ -313,14 +315,16 @@ void ArmElement::registerParameters(ParameterRegistry&) {
     Lx_->addConsumer(id_);
     Lyi_->addConsumer(id_);
     Lyo_->addConsumer(id_);
-    Tmax_->addConsumer(id_);
+    r_o_->addConsumer(id_);
+    t_wall_->addConsumer(id_);
 }
 
 void ArmElement::rebindParameters(ParameterRegistry& registry) {
     Lx_ = requireMutableParameter(registry, Lx_->stable_id());
     Lyi_ = requireMutableParameter(registry, Lyi_->stable_id());
     Lyo_ = requireMutableParameter(registry, Lyo_->stable_id());
-    Tmax_ = requireMutableParameter(registry, Tmax_->stable_id());
+    r_o_ = requireMutableParameter(registry, r_o_->stable_id());
+    t_wall_ = requireMutableParameter(registry, t_wall_->stable_id());
 }
 
 void ArmElement::registerConstraints(ConstraintRegistry& registry) const {
@@ -347,6 +351,7 @@ void ArmElement::registerConstraints(ConstraintRegistry& registry) const {
 }
 
 void ArmElement::updateFromParameters() {
+    constexpr double kPi = 3.14159265358979323846;
     const double length = armLength(index_, Lx_->value, Lyi_->value, Lyo_->value);
     mass_ = frameMass(Lx_->value, Lyi_->value, Lyo_->value) / 6.0;
     local_com_.setZero();
@@ -354,7 +359,15 @@ void ArmElement::updateFromParameters() {
     local_inertia_(0, 0) = 1e-6;
     local_inertia_(1, 1) = mass_ * length * length / 12.0;
     local_inertia_(2, 2) = local_inertia_(1, 1);
-    primitives_ = {GeometryPrimitive::makeSegment(length, 0.05)};
+
+    r_o_val_ = r_o_->value;
+    r_i_val_ = r_o_->value - t_wall_->value;
+    const double ro2 = r_o_val_ * r_o_val_;
+    const double ri2 = r_i_val_ * r_i_val_;
+    cross_section_area_ = kPi * (ro2 - ri2);
+    second_moment_of_area_ = kPi / 4.0 * (ro2 * ro2 - ri2 * ri2);
+
+    primitives_ = {GeometryPrimitive::makeSegment(length, r_o_val_)};
     anchors_.clear();
     setAnchor("root", Eigen::Isometry3d::Identity());
     Eigen::Isometry3d tip = Eigen::Isometry3d::Identity();
@@ -372,6 +385,34 @@ double ArmElement::structuralSpanContribution() const {
 
 bool ArmElement::contributesToFrameMass() const {
     return true;
+}
+
+double ArmElement::outerRadius() const {
+    return r_o_val_;
+}
+
+double ArmElement::innerRadius() const {
+    return r_i_val_;
+}
+
+double ArmElement::crossSectionArea() const {
+    return cross_section_area_;
+}
+
+double ArmElement::secondMomentOfArea() const {
+    return second_moment_of_area_;
+}
+
+void ArmElement::clearLoads() {
+    loads_.clear();
+}
+
+void ArmElement::addLoad(const AppliedLoad& load) {
+    loads_.push_back(load);
+}
+
+const std::vector<AppliedLoad>& ArmElement::loads() const {
+    return loads_;
 }
 
 MotorElement::MotorElement(std::string id, const int index, DesignParameter* thrust_max)
