@@ -38,7 +38,9 @@ function cfg = mdo_config()
 %   hover_nom    : (T_bar_hover / T_max)^2                    (nominal hover load fraction)
 %
 cfg.objectives.stage1.names   = {'mass', 'power', 'fault_thrust', 'fault_alloc', 'hover_nom'};
-cfg.objectives.stage1.weights = [0.20,   0.20,    0.25,           0.25,          0.10];
+% cfg.objectives.stage1.weights = [0.20,   0.20,    0.25,           0.25,          0.10];
+% 수정
+cfg.objectives.stage1.weights = [0.15,   0.15,    0.35,           0.35,          0.0];
 
 % gamma_req: required post-fault thrust-to-weight ratio for J_fault_thrust.
 % Increase to demand greater fault margin (higher value → more optimization pressure).
@@ -115,6 +117,10 @@ cfg.sim.mission.ramp_time = 0;
 end
 
 %% add(2026-05-15 by shin)
-
+cfg.regulatory.gamma_T_req   = 1.5;   % g1: 고장 후 추력 여유 기준
+cfg.regulatory.sigma_min_req = 0.05;  % g2: 제어 유효성(WCFR) 기준
+cfg.regulatory.lambda_motor  = 1e-4;  % g3: 모터 고장률 [/fh]
+cfg.regulatory.P_cat_max     = 1e-9;  % g3: 파국적 사고 확률 한계
+cfg.regulatory.m_max         = 3175;  % g4: 최대 인증 이륙 중량 [kg]
 
 
