@@ -113,3 +113,8 @@ cfg.sim.mission.t_start   = 20;      % mission start time after climb [s]
 cfg.sim.mission.n_laps    = 1;
 cfg.sim.mission.ramp_time = 0;
 end
+
+%% add(2026-05-15 by shin)
+
+
+
