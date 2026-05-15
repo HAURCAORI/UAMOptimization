@@ -30,11 +30,21 @@ if isfield(cfg_or_fault, 'vars')
     fault_config.include_double = cfg_or_fault.fault.include_double;
     fault_config.p_motor        = cfg_or_fault.fault.p_motor;
     fault_config.gamma_T_req    = cfg_or_fault.fault.gamma_T_req;
+    
+    % [추가됨] Regulatory 설정 불러오기
+    if isfield(cfg_or_fault, 'regulatory')
+        reg_cfg = cfg_or_fault.regulatory;
+    else
+        reg_cfg = struct('gamma_T_req', 1.5, 'sigma_min_req', 0.05, 'lambda_motor', 1e-4, 'P_cat_max', 1e-9, 'm_max', 3175);
+    end
 else
     fault_config = cfg_or_fault;
     if ~isfield(fault_config, 'include_double'), fault_config.include_double = false; end
     if ~isfield(fault_config, 'p_motor'),        fault_config.p_motor = 0.05; end
     if ~isfield(fault_config, 'gamma_T_req'),    fault_config.gamma_T_req = 1.5; end
+    
+    % [추가됨] 예외 처리를 위한 기본 Regulatory 설정
+    reg_cfg = struct('gamma_T_req', 1.5, 'sigma_min_req', 0.05, 'lambda_motor', 1e-4, 'P_cat_max', 1e-9, 'm_max', 3175);
 end
 
 gamma_T_req = fault_config.gamma_T_req;
@@ -118,10 +128,27 @@ J_fault_thrust = max(0, gamma_T_req - gamma_worst)^2;
 J_fault_alloc  = sigma_ref / max(sigma_worst, 1e-9);
 J_fault        = 0.5 * (J_fault_thrust + J_fault_alloc);
 
-%% Feasibility
+%% Feasibility & Regulatory Hard Constraints (EASA/FAA)
 geo_ok = (d.Lx > 0.5) && (d.Lyi > 0.5) && (d.Lyo > d.Lyi + 0.1);
 
-result.feasible = geo_ok && (acs.WCFR >= 0.05) && all(acs.hover_ok_single) && ...
+% g1: 고장 후 추력 여유 검사 (EASA VTOL.2135)
+g1_ok = gamma_worst >= reg_cfg.gamma_T_req;
+
+% g2: 제어 유효성 검사 (EASA VTOL.2135)
+g2_ok = sigma_worst >= reg_cfg.sigma_min_req; 
+
+% g3: 파국적 고장 확률 검사 (EASA VTOL.2510)
+P_cat = nchoosek(6, 2) * (reg_cfg.lambda_motor^2);
+g3_ok = P_cat <= reg_cfg.P_cat_max;
+
+% g4: 최대 이륙 질량 검사 (EASA VTOL.2100) - 기존 m 변수 사용
+g4_ok = m <= reg_cfg.m_max;
+
+% g5: 모든 로터 단일 고장 제어 가능성 
+g5_ok = all(acs.hover_ok_single);
+
+% 최종 판정: 기존 조건들과 규제(g1~g5)를 모두 통과해야 feasible = true
+result.feasible = geo_ok && g1_ok && g2_ok && g3_ok && g4_ok && g5_ok && ...
                   hover_ok_nom && isfinite(J_hover_nom);
 result.acs     = acs;
 result.J_FII   = J_FII;
