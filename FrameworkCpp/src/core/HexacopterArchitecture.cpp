@@ -18,8 +18,13 @@ constexpr double kBaselineLyi = 2.65;
 constexpr double kBaselineLyo = 5.50;
 constexpr double kBaselineCT = 0.03;
 constexpr double kBaselinePropDiameter = 0.40;
-constexpr double kBaselinePayload = 1500.0;
-constexpr double kBaselineTmax = 2240.73 * 2.0 / 6.0 * 9.81;
+constexpr double kBaselinePayload = 800.0;  // air-taxi: pilot + 3-4 pax × ~180 kg
+// Motor-2 fault (0-indexed; x=0, y=-Lyo) is the binding ACS case: requires T_max >= mg/2.
+// At payload=800, m_bat=400, default arms: m_total≈2130 kg → mg/2≈10450 N.
+// Default 12000 N starts the optimizer inside the feasible region (hover_margin≈+0.12).
+// Lower bound 8000 N remains valid for compact, light designs (min arms + low m_bat).
+constexpr double kBaselineTmax = 12000.0;
+constexpr double kBaselineBatteryMass = 400.0;  // Phase 2: default battery mass [kg]
 
 std::string canonicalPairKey(const std::string_view lhs_id, const std::string_view rhs_id) {
     if (lhs_id <= rhs_id) {
@@ -255,6 +260,10 @@ double HexacopterArchitecture::payloadMass() const {
     return payload_parameter_->value;
 }
 
+double HexacopterArchitecture::batteryMass() const {
+    return mbat_parameter_->value;
+}
+
 bool HexacopterArchitecture::useVehicleModel() const {
     return use_vehicle_model_;
 }
@@ -274,15 +283,20 @@ std::string HexacopterArchitecture::packagingPairKey(const std::string_view lhs_
 void HexacopterArchitecture::registerDefaultParameters() {
     parameters_.clear();
 
-    parameters_.add({"Lx", id_, "m", "Fore/aft arm length", kBaselineLx, 1.0, 5.0, kBaselineLx, true, 1.0});
-    parameters_.add({"Lyi", id_, "m", "Inner lateral arm length", kBaselineLyi, 1.0, 5.0, kBaselineLyi, true, 1.0});
+    // Lower bounds 2.0m prevent arm_1256 = sqrt(Lx²+Lyi²) from collapsing to ~1.4m while Lyo→9m.
+    // At Lx=Lyi=2.0, arm_1256 >= 2.83m vs arm_34 max 9m → ratio ≤ 3.2 (vs 6.4 at old bound 1.0).
+    parameters_.add({"Lx", id_, "m", "Fore/aft arm length", kBaselineLx, 2.0, 5.0, kBaselineLx, true, 1.0});
+    parameters_.add({"Lyi", id_, "m", "Inner lateral arm length", kBaselineLyi, 2.0, 5.0, kBaselineLyi, true, 1.0});
     parameters_.add({"Lyo", id_, "m", "Outer lateral arm length", kBaselineLyo, 2.5, 9.0, kBaselineLyo, true, 1.0});
-    parameters_.add({"T_max", id_, "N", "Maximum thrust per motor", kBaselineTmax, 8000.0, 16000.0, kBaselineTmax, true, 1.0});
+    parameters_.add({"T_max", id_, "N", "Maximum thrust per motor", kBaselineTmax, 8000.0, 20000.0, kBaselineTmax, true, 1.0});
     parameters_.add({"cT", id_, "-", "Moment to thrust ratio", kBaselineCT, 0.01, 0.08, kBaselineCT, false, 1.0});
     parameters_.add({"d_prop", id_, "m", "Propeller diameter", kBaselinePropDiameter, 0.20, 1.20, kBaselinePropDiameter, false, 1.0});
-    parameters_.add({"m_payload", id_, "kg", "Payload mass", kBaselinePayload, 1000.0, 2500.0, kBaselinePayload, false, 1.0});
+    parameters_.add({"m_payload", id_, "kg", "Payload mass", kBaselinePayload, 400.0, 2000.0, kBaselinePayload, false, 1.0});
     parameters_.add({"arm_outer_radius", id_, "m", "Arm tube outer radius", 0.08, 0.02, 0.15, 0.08, true, 1.0});
     parameters_.add({"arm_wall_thickness", id_, "m", "Arm tube wall thickness", 0.005, 0.001, 0.020, 0.005, true, 1.0});
+    // Phase 2: battery mass design variable. Contributes to total mass and energy capacity.
+    // Bounds calibrated so [100,1000] kg spans infeasible→comfortable energy reserve at baseline.
+    parameters_.add({"m_bat", id_, "kg", "Battery pack mass", kBaselineBatteryMass, 100.0, 1000.0, kBaselineBatteryMass, true, 1.0});
 }
 
 void HexacopterArchitecture::registerDefaultConstraints() {
@@ -383,7 +397,100 @@ void HexacopterArchitecture::registerDefaultConstraints() {
             return constraint.evaluate(min_sf);
         }
     });
+
+    // Phase 2: battery energy reserve — available energy must cover nominal + emergency mission.
+    // reserve_fraction = (E_avail - E_req_total) / E_avail >= 0.
+    constraints_.add({
+        "battery_energy_reserve",
+        id_,
+        ConstraintSense::greater_equal,
+        0.0,
+        true,
+        true,
+        2000.0,
+        [](const ConstraintEvaluationContext& context) {
+            Constraint constraint{"battery_energy_reserve", context.architecture.id(),
+                ConstraintSense::greater_equal, 0.0};
+            return constraint.evaluate(context.stage1_metrics.bat_energy_reserve_fraction);
+        }
+    });
+
+    // Phase 2: battery C-rate — peak current draw must not exceed pack continuous rating.
+    // Violation value = C_rate / C_allow - 1; feasible when <= 0.
+    constraints_.add({
+        "battery_crate_limit",
+        id_,
+        ConstraintSense::less_equal,
+        0.0,
+        true,
+        true,
+        1500.0,
+        [](const ConstraintEvaluationContext& context) {
+            const double ratio = context.stage1_metrics.bat_c_rate
+                / std::max(context.evaluation_context.battery_crate_limit, 1e-9) - 1.0;
+            Constraint constraint{"battery_crate_limit", context.architecture.id(),
+                ConstraintSense::less_equal, 0.0};
+            return constraint.evaluate(ratio);
+        }
+    });
+
+    // ACS fault-hover feasibility: all single-fault hover trims must be achievable within T_max.
+    // hover_margin = T_max / T_hover_worst - 1 >= 0 when all faults feasible.
+    // Continuous violation (not binary) gives CMA-ES a gradient signal within the infeasible region:
+    //   violation = max(0, -hover_margin) = max(0, T_hover_worst/T_max - 1) ∈ [0, 1].
+    // Large penalty (20000) ensures the gradient dominates over objective terms near the boundary.
+    constraints_.add({
+        "all_faults_hover_feasible",
+        "acs",
+        ConstraintSense::greater_equal,
+        0.0,
+        true,
+        true,
+        20000.0,
+        [](const ConstraintEvaluationContext& context) {
+            if (!context.evaluation_context.require_all_fault_acs_feasible) {
+                return ConstraintEvaluation{1.0, 0.0, true};
+            }
+            // Cap at -1.0 so violation stays bounded when hover is completely infeasible.
+            const double margin = std::isfinite(context.stage1_metrics.acs_hover_margin)
+                ? context.stage1_metrics.acs_hover_margin
+                : -1.0;
+            Constraint constraint{"all_faults_hover_feasible", "acs",
+                ConstraintSense::greater_equal, 0.0};
+            return constraint.evaluate(margin);
+        }
+    });
+
+    // ACS 4D directional margin: worst-fault minimum directional margin must exceed eps_acs_fault_margin.
+    // m(d, u_req) = h_U(d) - d^T u_req for each of 11 sampled directions d and each of 6 fault cases.
+    // acs_worst_fault_min_margin = min over faults of min over directions.
+    // Normalized violation ∈ [0,1] so the penalty contribution is comparable to other constraints.
+    // Penalty 5000 < 20000 (LP feasibility) so LP trim constraint takes precedence during search.
+    constraints_.add({
+        "fault_directional_margin",
+        "acs",
+        ConstraintSense::greater_equal,
+        0.0,
+        true,
+        true,
+        5000.0,
+        [](const ConstraintEvaluationContext& context) {
+            const double margin = context.stage1_metrics.acs_worst_fault_min_margin;
+            const double eps = context.evaluation_context.eps_acs_fault_margin;
+            const double norm = std::max(eps, 1.0);
+            const double violation = std::max(0.0, (eps - margin) / norm);
+            return ConstraintEvaluation{margin, violation, margin >= eps};
+        }
+    });
+
 }
+// NOTE: acs::hover_slice_margin (sd >= ε) is NOT registered as a hard constraint.
+// Reason: For motor-2 fault (at x=0, y=-Lyo), the equality constraints (thrust + yaw=0) enforce
+//   T3+T5=mg/2 and T0+T1+T4=mg/2, which forces L = -Lyi*(T0-T1+T4) + Lyo*T3 + Lyi*T5 >= 0.
+// The minimum achievable roll moment under motor-2 fault is exactly 0, regardless of T_max or
+// arm geometry (as long as Lyi < Lyo). The origin (L=0,M=0) always lies on the polygon boundary.
+// hover_slice_signed_distance = 0 for motor-2 fault is geometrically expected, not a defect.
+// Use as an analysis metric only. Feasibility is enforced by acs::all_faults_hover_feasible.
 
 void HexacopterArchitecture::registerElementConstraints() {
     for (const auto& element : elements_) {
@@ -401,6 +508,7 @@ void HexacopterArchitecture::bindCanonicalParameters() {
     payload_parameter_ = parameters_.find(id_ + "::m_payload");
     r_o_parameter_ = parameters_.find(id_ + "::arm_outer_radius");
     t_wall_parameter_ = parameters_.find(id_ + "::arm_wall_thickness");
+    mbat_parameter_ = parameters_.find(id_ + "::m_bat");
 }
 
 void HexacopterArchitecture::rebuildElements() {
@@ -413,7 +521,8 @@ void HexacopterArchitecture::rebuildElements() {
         dprop_parameter_,
         payload_parameter_,
         r_o_parameter_,
-        t_wall_parameter_
+        t_wall_parameter_,
+        mbat_parameter_
     });
 
     for (auto& element : elements_) {
@@ -432,7 +541,8 @@ void HexacopterArchitecture::rebuildAttachments() {
         dprop_parameter_,
         payload_parameter_,
         r_o_parameter_,
-        t_wall_parameter_
+        t_wall_parameter_,
+        mbat_parameter_
     });
 }
 

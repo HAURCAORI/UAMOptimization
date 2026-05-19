@@ -17,6 +17,7 @@ struct DefaultHexacopterParameters {
     DesignParameter* payload = nullptr;
     DesignParameter* r_o = nullptr;
     DesignParameter* t_wall = nullptr;
+    DesignParameter* m_bat = nullptr;  // Phase 2: battery pack mass design variable
 };
 
 class DefaultHexacopterBuilder {

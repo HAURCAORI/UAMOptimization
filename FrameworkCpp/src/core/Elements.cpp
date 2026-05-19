@@ -238,8 +238,13 @@ void BodyElement::updateFromParameters() {
     setAnchor("bottom", bottom);
 }
 
-BatteryElement::BatteryElement(std::string id, DesignParameter* thrust_max, DesignParameter* propeller_diameter)
+BatteryElement::BatteryElement(
+    std::string id,
+    DesignParameter* m_bat,
+    DesignParameter* thrust_max,
+    DesignParameter* propeller_diameter)
     : BasicSpatialElement(std::move(id), "BatteryElement"),
+      m_bat_(m_bat),
       thrust_max_(thrust_max),
       propeller_diameter_(propeller_diameter) {}
 
@@ -248,47 +253,51 @@ std::unique_ptr<SpatialElement> BatteryElement::clone() const {
 }
 
 void BatteryElement::registerParameters(ParameterRegistry&) {
+    m_bat_->addConsumer(id_);
     thrust_max_->addConsumer(id_);
     propeller_diameter_->addConsumer(id_);
 }
 
 void BatteryElement::rebindParameters(ParameterRegistry& registry) {
+    m_bat_ = requireMutableParameter(registry, m_bat_->stable_id());
     thrust_max_ = requireMutableParameter(registry, thrust_max_->stable_id());
     propeller_diameter_ = requireMutableParameter(registry, propeller_diameter_->stable_id());
 }
 
 void BatteryElement::registerConstraints(ConstraintRegistry& registry) const {
-    const std::string thrust_id = thrust_max_->stable_id();
-    const std::string prop_id = propeller_diameter_->stable_id();
+    const std::string mbat_id = m_bat_->stable_id();
     registry.add({
-        "battery_sizing_inputs",
+        "battery_mass_positive",
         id_,
         ConstraintSense::greater_equal,
         0.0,
         true,
         true,
         500.0,
-        [thrust_id, prop_id](const ConstraintEvaluationContext& context) {
-            const auto& thrust = requireParameter(context.architecture.parameters(), thrust_id);
-            const auto& prop = requireParameter(context.architecture.parameters(), prop_id);
-            const double value = std::min(thrust.value, prop.value);
-            Constraint constraint{"battery_sizing_inputs", "battery", ConstraintSense::greater_equal, 0.0};
-            return constraint.evaluate(value);
+        [mbat_id](const ConstraintEvaluationContext& context) {
+            const auto& mbat = requireParameter(context.architecture.parameters(), mbat_id);
+            Constraint constraint{"battery_mass_positive", "battery", ConstraintSense::greater_equal, 0.0};
+            return constraint.evaluate(mbat.value);
         }
     });
 }
 
 void BatteryElement::updateFromParameters() {
+    // Battery mass is the m_bat design variable — contributes directly to total vehicle mass.
+    mass_ = m_bat_->value;
+    local_com_.setZero();
+    local_inertia_.setZero();
     const double normalized_thrust = thrust_max_->value / kBaselineMotorTmax;
     const double length = kBatteryLengthBase + kBatteryLengthScale * normalized_thrust;
     const double width = kBatteryWidthBase + kBatteryWidthScale * propeller_diameter_->value;
-    mass_ = 0.0;
-    local_com_.setZero();
-    local_inertia_.setZero();
     primitives_ = {GeometryPrimitive::makeBox({0.5 * length, 0.5 * width, kBatteryHalfHeight}, kBatteryBoxPadding)};
     anchors_.clear();
     setAnchor("mount", Eigen::Isometry3d::Identity());
     setAnchor("center", Eigen::Isometry3d::Identity());
+}
+
+double BatteryElement::batteryMass() const {
+    return m_bat_->value;
 }
 
 ArmElement::ArmElement(

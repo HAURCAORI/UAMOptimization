@@ -36,4 +36,12 @@ public:
     virtual ~IPayloadMassContributor() = default;
 };
 
+// Implemented by elements that store energy (battery packs).
+// BatteryEvaluator queries this to obtain the battery mass design variable.
+class IEnergyStorage {
+public:
+    virtual ~IEnergyStorage() = default;
+    [[nodiscard]] virtual double batteryMass() const = 0;
+};
+
 }  // namespace hexaarch::core

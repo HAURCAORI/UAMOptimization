@@ -53,6 +53,26 @@ struct PackagingReport {
     double overlap_penalty = 0.0;
 };
 
+struct PowertrainResult {
+    std::array<double, kNumRotors> motor_power_nominal{};   // W per motor, nominal hover trim
+    std::array<double, kNumRotors> motor_power_faulted{};   // W per motor, worst-fault hover trim
+    double total_power_nominal_w = 0.0;    // total electrical power at nominal hover [W]
+    double total_power_faulted_w = 0.0;    // total electrical power at worst-fault hover [W]
+    double worst_thrust_utilization = 0.0; // max(T_i / T_max) at nominal hover ∈ [0,1]
+    double worst_power_utilization = 0.0;  // max(P_i / P_cont_i) at nominal hover ∈ [0,1]
+};
+
+struct BatteryResult {
+    double available_energy_wh = 0.0;         // E_avail = eta_pack × DoD × m_bat × e_spec [Wh]
+    double required_energy_nominal_wh = 0.0;  // P_nom × t_nom [Wh]
+    double required_energy_fault_wh = 0.0;    // P_fault × t_emg [Wh]
+    double required_energy_total_wh = 0.0;    // nom + fault [Wh]
+    double energy_reserve_fraction = 0.0;     // (E_avail - E_req) / E_avail; ≥0 = feasible
+    // C-rate = P_peak [W] / E_avail [Wh]; voltage cancels: C = I/Q = (P/V)/(E/V) = P/E
+    double c_rate = 0.0;                      // peak discharge rate [1/h]; limit = C_allow
+    double mass_fraction = 0.0;               // m_bat / m_total ∈ [0,1]
+};
+
 struct PhysicalModel {
     MassProperties mass_properties;
     PropulsionProperties propulsion;

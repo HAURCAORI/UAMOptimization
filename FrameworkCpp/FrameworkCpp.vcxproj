@@ -51,6 +51,7 @@
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
     </ClCompile>
+    <ClCompile Include="src\analysis\AcsPlotter.cpp" />
     <ClCompile Include="src\analysis\ComparisonReporter.cpp" />
     <ClCompile Include="src\analysis\CsvExporter.cpp" />
     <ClCompile Include="src\analysis\ParetoAnalyzer.cpp" />
@@ -72,7 +73,10 @@
     <ClCompile Include="src\optimization\PagmoProblemAdapter.cpp" />
     <ClCompile Include="src\optimization\SooRunner.cpp" />
     <ClCompile Include="src\physics\AllocationMatrixBuilder.cpp" />
+    <ClCompile Include="src\physics\AttainableControlSetAnalyzer.cpp" />
+    <ClCompile Include="src\physics\BatteryEvaluator.cpp" />
     <ClCompile Include="src\physics\PhysicsTypes.cpp" />
+    <ClCompile Include="src\physics\PowertrainEvaluator.cpp" />
     <ClCompile Include="src\physics\PrimitiveDistance.cpp" />
     <ClCompile Include="src\physics\StructuralAnalyzer.cpp" />
     <ClCompile Include="src\physics\VehicleScalingModel.cpp" />
@@ -83,6 +87,7 @@
     <ClCompile Include="visualization\src\visualization\ViewerCamera.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="include\analysis\AcsPlotter.hpp" />
     <ClInclude Include="include\analysis\ComparisonReporter.hpp" />
     <ClInclude Include="include\analysis\CsvExporter.hpp" />
     <ClInclude Include="include\analysis\ParetoAnalyzer.hpp" />
@@ -90,6 +95,7 @@
     <ClInclude Include="include\core\AssemblyState.hpp" />
     <ClInclude Include="include\core\Attachment.hpp" />
     <ClInclude Include="include\core\Constraint.hpp" />
+    <ClInclude Include="include\core\ElementCapabilities.hpp" />
     <ClInclude Include="include\core\ConstraintRegistry.hpp" />
     <ClInclude Include="include\core\DefaultHexacopterBuilder.hpp" />
     <ClInclude Include="include\core\DesignParameter.hpp" />
@@ -109,8 +115,11 @@
     <ClInclude Include="include\optimization\PagmoProblemAdapter.hpp" />
     <ClInclude Include="include\optimization\SooRunner.hpp" />
     <ClInclude Include="include\physics\AllocationMatrixBuilder.hpp" />
+    <ClInclude Include="include\physics\AttainableControlSetAnalyzer.hpp" />
+    <ClInclude Include="include\physics\BatteryEvaluator.hpp" />
     <ClInclude Include="include\physics\Material.hpp" />
     <ClInclude Include="include\physics\PhysicsTypes.hpp" />
+    <ClInclude Include="include\physics\PowertrainEvaluator.hpp" />
     <ClInclude Include="include\physics\PrimitiveDistance.hpp" />
     <ClInclude Include="include\physics\StructuralAnalyzer.hpp" />
     <ClInclude Include="include\physics\VehicleScalingModel.hpp" />
@@ -131,26 +140,26 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
@@ -174,15 +183,17 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Label="Vcpkg">
     <VcpkgEnableManifest>true</VcpkgEnableManifest>
+    <VcpkgOverlayPorts>$(ProjectDir)vcpkg-overlay-ports</VcpkgOverlayPorts>
+    <VcpkgInstalledDir>$(ProjectDir)vcpkg_installed\</VcpkgInstalledDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)visualization\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include\eigen3;$(ProjectDir)vcpkg_installed\x64-windows\include;$(ProjectDir)vcpkg_installed\x64-windows\include\eigen3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)visualization\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include\eigen3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <Optimization>Disabled</Optimization>
     </ClCompile>
     <Link>
@@ -196,10 +207,10 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)visualization\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include\eigen3;$(ProjectDir)vcpkg_installed\x64-windows\include;$(ProjectDir)vcpkg_installed\x64-windows\include\eigen3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)visualization\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include\eigen3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <!-- OldStyle (/Z7): debug info in .obj; avoids C1041 when parallel cl.exe contends on vc143.pdb. -->
       <DebugInformationFormat>OldStyle</DebugInformationFormat>
     </ClCompile>
@@ -215,7 +226,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)visualization\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include\eigen3;$(ProjectDir)vcpkg_installed\x64-windows\include;$(ProjectDir)vcpkg_installed\x64-windows\include\eigen3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)visualization\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include\eigen3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <Optimization>Disabled</Optimization>
     </ClCompile>
     <Link>
@@ -232,7 +243,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)visualization\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include\eigen3;$(ProjectDir)vcpkg_installed\x64-windows\include;$(ProjectDir)vcpkg_installed\x64-windows\include\eigen3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)visualization\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include\eigen3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <!-- OldStyle (/Z7): debug info in .obj; avoids C1041 when parallel cl.exe contends on vc143.pdb. -->
       <DebugInformationFormat>OldStyle</DebugInformationFormat>
     </ClCompile>

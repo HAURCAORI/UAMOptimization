@@ -20,6 +20,35 @@ struct EvaluationContext {
     double minimum_outer_arm_delta = 0.1;
     physics::Material arm_material = physics::Materials::Al7075();
     double minimum_arm_safety_factor = 1.5;
+
+    // ACS config (Phase 1 — G: Attainable Control Set)
+    // Hard constraint: all single-rotor-fault trim cases must be feasible.
+    bool require_all_fault_acs_feasible = true;
+    // Minimum 4D directional ACS margin across all fault cases and all sampled directions [N or N·m].
+    // Enforces a strictly positive wrench-space headroom beyond the hover trim point.
+    // Calibrated at ~750 Nm for typical feasible designs; 50 Nm ≈ 7% of that, tightly positive.
+    double eps_acs_fault_margin = 50.0;
+
+    // Phase 2: Powertrain (D) — actuator-disk power model parameters.
+    // Effective disk radius = max_arm_length / 2 (set by PowertrainEvaluator, not d_prop).
+    double figure_of_merit = 0.65;    // hover figure of merit (ideal vs actual induced power)
+    double motor_efficiency = 0.85;   // motor mechanical efficiency
+    double esc_efficiency = 0.95;     // ESC electrical efficiency
+    double air_density = 1.225;       // kg/m^3 at sea level ISA
+
+    // Phase 2: Battery (E) — energy budget parameters.
+    // All energies in Wh; times in minutes.
+    // e_spec=250 Wh/kg: NMC811 cell-level (2025 era), pack efficiency applied separately.
+    // C_rate=5.0: peak burst C-rate for hover phases; continuous during cruise would be ~1-2C.
+    double battery_specific_energy_wh_per_kg = 250.0;  // NMC811 cell-level, 2025-era [Wh/kg]
+    double battery_dod_usable = 0.85;                   // usable depth of discharge
+    double battery_pack_efficiency = 0.95;              // pack-level Wh efficiency
+    double battery_voltage_nominal = 48.0;              // nominal bus voltage [V]
+    double battery_crate_limit = 5.0;                   // peak C-rate during hover [1/h]
+    double mission_time_nominal_min = 6.0;              // required hover endurance [min]
+    double mission_time_emergency_min = 1.0;            // required fault-hover endurance [min]
+    double power_auxiliary_w = 500.0;                   // avionics + payload auxiliary draw [W]
+
     std::vector<ObjectiveWeight> objective_weights{
         {"mass", 0.20},
         {"power", 0.20},
@@ -28,7 +57,8 @@ struct EvaluationContext {
         {"hover_nom", 0.10},
         {"structural", 0.0},
         {"packaging", 0.0},
-        {"structural_safety", 0.0}
+        {"structural_safety", 0.0},
+        {"acs_margin", 0.10}
     };
 };
 

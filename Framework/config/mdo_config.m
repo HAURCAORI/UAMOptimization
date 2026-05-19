@@ -114,7 +114,6 @@ cfg.sim.mission.z_cruise  = 50;      % cruise altitude [m]
 cfg.sim.mission.t_start   = 20;      % mission start time after climb [s]
 cfg.sim.mission.n_laps    = 1;
 cfg.sim.mission.ramp_time = 0;
-end
 
 %% add(2026-05-15 by shin)
 cfg.regulatory.gamma_T_req   = 1.5;   % g1: 고장 후 추력 여유 기준
@@ -122,5 +121,8 @@ cfg.regulatory.sigma_min_req = 0.05;  % g2: 제어 유효성(WCFR) 기준
 cfg.regulatory.lambda_motor  = 1e-4;  % g3: 모터 고장률 [/fh]
 cfg.regulatory.P_cat_max     = 1e-9;  % g3: 파국적 사고 확률 한계
 cfg.regulatory.m_max         = 3175;  % g4: 최대 인증 이륙 중량 [kg]
+
+end
+
 
 

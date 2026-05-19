@@ -96,7 +96,27 @@ nlohmann::json stage1ToJson(const evaluation::Stage1Metrics& m) {
         {"gamma_worst", m.gamma_worst}, {"sigma_worst", m.sigma_worst},
         {"sigma_reference", m.sigma_reference},
         {"hover_utilization_nominal", m.hover_utilization_nominal},
-        {"hover_ok_nominal", m.hover_ok_nominal}
+        {"hover_ok_nominal", m.hover_ok_nominal},
+        {"acs_nominal_feasible", m.acs_nominal_feasible},
+        {"acs_all_faults_feasible", m.acs_all_faults_feasible},
+        {"acs_nominal_min_margin", m.acs_nominal_min_margin},
+        {"acs_worst_fault_min_margin", m.acs_worst_fault_min_margin},
+        {"acs_overall_min_margin", m.acs_overall_min_margin},
+        {"acs_margin_penalty", m.acs_margin_penalty},
+        {"acs_PFWAR", m.acs_PFWAR},
+        {"acs_FII", m.acs_FII},
+        {"acs_WCFR", m.acs_WCFR},
+        {"acs_hover_margin", m.acs_hover_margin},
+        {"acs_hover_slice_worst_fault_margin", m.acs_hover_slice_worst_fault_margin},
+        {"pt_total_power_nominal_w", m.pt_total_power_nominal_w},
+        {"pt_total_power_faulted_w", m.pt_total_power_faulted_w},
+        {"pt_worst_thrust_utilization", m.pt_worst_thrust_utilization},
+        {"pt_worst_power_utilization", m.pt_worst_power_utilization},
+        {"bat_available_energy_wh", m.bat_available_energy_wh},
+        {"bat_required_energy_wh", m.bat_required_energy_wh},
+        {"bat_energy_reserve_fraction", m.bat_energy_reserve_fraction},
+        {"bat_c_rate", m.bat_c_rate},
+        {"bat_mass_fraction", m.bat_mass_fraction}
     };
 }
 
@@ -167,6 +187,18 @@ nlohmann::json evaluationContextToJson(const evaluation::EvaluationContext& cont
             {"yield_strength", context.arm_material.yield_strength},
             {"elastic_modulus", context.arm_material.elastic_modulus}
         }},
+        {"figure_of_merit", context.figure_of_merit},
+        {"motor_efficiency", context.motor_efficiency},
+        {"esc_efficiency", context.esc_efficiency},
+        {"air_density", context.air_density},
+        {"battery_specific_energy_wh_per_kg", context.battery_specific_energy_wh_per_kg},
+        {"battery_dod_usable", context.battery_dod_usable},
+        {"battery_pack_efficiency", context.battery_pack_efficiency},
+        {"battery_voltage_nominal", context.battery_voltage_nominal},
+        {"battery_crate_limit", context.battery_crate_limit},
+        {"mission_time_nominal_min", context.mission_time_nominal_min},
+        {"mission_time_emergency_min", context.mission_time_emergency_min},
+        {"power_auxiliary_w", context.power_auxiliary_w},
         {"objective_weights", weights}
     };
 }
@@ -293,7 +325,7 @@ bool CsvExporter::writeParetoCsv(
 
     const auto summary = ParetoAnalyzer{}.analyze(result);
 
-    stream << "population_index,is_nondominated,is_knee,feasible,combined_objective,gamma_worst,sigma_worst,min_safety_factor";
+    stream << "population_index,is_nondominated,is_knee,feasible,combined_objective,gamma_worst,sigma_worst,min_safety_factor,acs_PFWAR,acs_WCFR,acs_FII,acs_hover_margin,acs_hover_slice_worst_fault_margin";
     for (const auto& name : result.objective_names) {
         stream << ",obj_" << name;
     }
@@ -311,7 +343,12 @@ bool CsvExporter::writeParetoCsv(
                << point.evaluation.combined_objective << ','
                << point.evaluation.stage1.gamma_worst << ','
                << point.evaluation.stage1.sigma_worst << ','
-               << point.evaluation.physical_model.structural.min_safety_factor;
+               << point.evaluation.physical_model.structural.min_safety_factor << ','
+               << point.evaluation.stage1.acs_PFWAR << ','
+               << point.evaluation.stage1.acs_WCFR << ','
+               << point.evaluation.stage1.acs_FII << ','
+               << point.evaluation.stage1.acs_hover_margin << ','
+               << point.evaluation.stage1.acs_hover_slice_worst_fault_margin;
 
         for (const auto value : point.objective_vector) {
             stream << ',' << value;

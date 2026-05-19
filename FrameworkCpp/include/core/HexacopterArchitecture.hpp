@@ -56,6 +56,7 @@ public:
     [[nodiscard]] double cT() const;
     [[nodiscard]] double propellerDiameter() const;
     [[nodiscard]] double payloadMass() const;
+    [[nodiscard]] double batteryMass() const;  // Phase 2: battery pack mass [kg]
     [[nodiscard]] bool useVehicleModel() const;
     [[nodiscard]] double nominalMass() const;
     [[nodiscard]] double gravity() const;
@@ -93,6 +94,7 @@ private:
     DesignParameter* payload_parameter_ = nullptr;
     DesignParameter* r_o_parameter_ = nullptr;
     DesignParameter* t_wall_parameter_ = nullptr;
+    DesignParameter* mbat_parameter_ = nullptr;  // Phase 2: battery pack mass
 };
 
 }  // namespace hexaarch::core

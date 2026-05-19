@@ -73,16 +73,21 @@ private:
     DesignParameter* Lyo_;
 };
 
-class BatteryElement final : public BasicSpatialElement {
+class BatteryElement final : public BasicSpatialElement, public IEnergyStorage {
 public:
-    BatteryElement(std::string id, DesignParameter* thrust_max, DesignParameter* propeller_diameter);
+    // m_bat: battery pack mass design variable (contributes to total mass and energy capacity).
+    // thrust_max / propeller_diameter: used for geometry scaling only, not for mass.
+    BatteryElement(std::string id, DesignParameter* m_bat,
+                   DesignParameter* thrust_max, DesignParameter* propeller_diameter);
     [[nodiscard]] std::unique_ptr<SpatialElement> clone() const override;
     void registerParameters(ParameterRegistry& registry) override;
     void rebindParameters(ParameterRegistry& registry) override;
     void registerConstraints(ConstraintRegistry& registry) const override;
     void updateFromParameters() override;
+    [[nodiscard]] double batteryMass() const override;
 
 private:
+    DesignParameter* m_bat_;
     DesignParameter* thrust_max_;
     DesignParameter* propeller_diameter_;
 };

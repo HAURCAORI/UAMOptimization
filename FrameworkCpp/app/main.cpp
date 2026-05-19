@@ -9,6 +9,7 @@
 #include <thread>
 #include <vector>
 
+#include "analysis/AcsPlotter.hpp"
 #include "analysis/ComparisonReporter.hpp"
 #include "analysis/CsvExporter.hpp"
 #include "analysis/ParetoAnalyzer.hpp"
@@ -52,6 +53,7 @@ struct CliOptions {
     unsigned moo_population_size = 48U;
     unsigned moo_generations = 60U;
     bool visualize = false;
+    bool plot_acs = false;
 };
 
 void printUsage() {
@@ -66,7 +68,10 @@ void printUsage() {
         << "  compare    Run baseline + SOO + MOO and export reports.\n"
         << "  visualize  Browse and render exported result files.\n"
         << "Flags:\n"
-        << "  --visualize  Show real-time architecture viewer during soo/moo optimization.\n";
+        << "  --visualize  Show real-time architecture viewer during soo/moo optimization.\n"
+        << "  --plot-acs   Generate SVG ACS plots + CSV vertex dump in <output-dir>/acs/.\n"
+        << "               Worst-case fault motor is auto-detected from ACS retention.\n"
+        << "               Open .svg files in any browser — no external tools required.\n";
 }
 
 std::optional<CliMode> parseMode(const std::string_view token) {
@@ -124,6 +129,10 @@ std::optional<CliOptions> parseArgs(const std::vector<std::string>& args) {
         }
         if (argument == "--visualize") {
             options.visualize = true;
+            continue;
+        }
+        if (argument == "--plot-acs") {
+            options.plot_acs = true;
             continue;
         }
 
@@ -191,16 +200,54 @@ CliOptions promptInteractive() {
         options.visualize = (!answer.empty() && (answer[0] == 'y' || answer[0] == 'Y'));
     }
 
+    if (options.mode != CliMode::moo && options.mode != CliMode::visualize) {
+        std::cout << "Generate ACS plots (SVG, opens in any browser)? [y/N]: ";
+        std::string answer;
+        std::getline(std::cin, answer);
+        options.plot_acs = (!answer.empty() && (answer[0] == 'y' || answer[0] == 'Y'));
+    }
+
     return options;
+}
+
+void runAcsPlot(
+    const hexaarch::evaluation::EvaluationResult& result,
+    const CliOptions& options,
+    const std::string& label) {
+    const auto acs_dir = options.output_dir / "acs";
+    if (!ensureOutputDirectory(acs_dir)) {
+        return;
+    }
+    hexaarch::analysis::AcsPlotter::Config cfg;
+    cfg.output_dir = acs_dir.string();
+    cfg.label = label;
+    const double mg =
+        result.physical_model.mass_properties.mass * result.physical_model.propulsion.gravity;
+    hexaarch::analysis::AcsPlotter{}.plot(
+        result.physical_model.allocation_matrix,
+        result.physical_model.propulsion.thrust_max,
+        mg,
+        result.acs,
+        cfg);
+    std::cout << "[" << currentTimestamp() << "] ACS plots written to: " << acs_dir.string() << '\n';
+    std::cout << "[" << currentTimestamp() << "] ACS metrics:"
+              << "  PFWAR=" << std::fixed << std::setprecision(4) << result.acs.PFWAR
+              << "  FII=" << result.acs.FII
+              << "  WCFR=" << result.acs.WCFR
+              << "  hover_margin=" << result.acs.hover_margin << '\n';
 }
 
 void printBaseline(
     const hexaarch::core::HexacopterArchitecture& architecture,
-    const hexaarch::evaluation::EvaluationContext& context) {
+    const hexaarch::evaluation::EvaluationContext& context,
+    const CliOptions& options) {
     const auto baseline = hexaarch::evaluation::ArchitectureEvaluator{}.evaluate(architecture, context);
     std::cout << "[" << currentTimestamp() << "] Architecture id: " << architecture.id() << '\n';
     std::cout << "[" << currentTimestamp() << "] Baseline: "
               << hexaarch::analysis::ComparisonReporter::summarize(baseline) << '\n';
+    if (options.plot_acs) {
+        runAcsPlot(baseline, options, "Baseline");
+    }
 }
 
 void runSoo(
@@ -242,6 +289,14 @@ void runSoo(
               << ", parameters=" << parameter_written
               << ", soo_json=" << soo_written << '\n';
     std::cout << "[" << currentTimestamp() << "] Output directory: " << options.output_dir.string() << '\n';
+
+    if (options.plot_acs) {
+        if (result.best_feasible.has_value()) {
+            runAcsPlot(result.best_feasible->result, options, "SOO-Best");
+        } else {
+            runAcsPlot(result.baseline, options, "SOO-Baseline");
+        }
+    }
 }
 
 void runMoo(
@@ -342,6 +397,13 @@ void runCompare(
               << ", moo_json=" << moo_written
               << ", compare_json=" << compare_written << '\n';
     std::cout << "[" << currentTimestamp() << "] Output directory: " << options.output_dir.string() << '\n';
+
+    if (options.plot_acs) {
+        runAcsPlot(baseline, options, "Compare-Baseline");
+        if (soo_result.best_feasible.has_value()) {
+            runAcsPlot(soo_result.best_feasible->result, options, "Compare-SOO-Best");
+        }
+    }
 }
 
 hexaarch::core::HexacopterArchitecture architectureFromDecisionVector(
@@ -603,7 +665,7 @@ int main(int argc, char** argv) {
 
     switch (parsed->mode) {
         case CliMode::evaluate:
-            printBaseline(architecture, context);
+            printBaseline(architecture, context, *parsed);
             break;
         case CliMode::soo:
             if (parsed->visualize) {

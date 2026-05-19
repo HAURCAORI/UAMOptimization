@@ -44,7 +44,7 @@ Eigen::Isometry3d poseFromDirection(const Eigen::Vector3d& origin, const Eigen::
 std::vector<SpatialElementPtr> DefaultHexacopterBuilder::buildElements(const DefaultHexacopterParameters& parameters) {
     std::vector<SpatialElementPtr> elements;
     elements.push_back(std::make_unique<BodyElement>("body", parameters.Lx, parameters.Lyi, parameters.Lyo));
-    elements.push_back(std::make_unique<BatteryElement>("battery", parameters.Tmax, parameters.dprop));
+    elements.push_back(std::make_unique<BatteryElement>("battery", parameters.m_bat, parameters.Tmax, parameters.dprop));
     elements.push_back(std::make_unique<PayloadElement>("payload", parameters.payload));
 
     for (int index = 0; index < 6; ++index) {

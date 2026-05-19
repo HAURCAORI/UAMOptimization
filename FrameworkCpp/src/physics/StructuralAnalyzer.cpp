@@ -42,9 +42,10 @@ void StructuralAnalyzer::analyze(
         const double I = beam->secondMomentOfArea();
 
         // Worst-case load: all rotors at Tmax simultaneously.
-        // Vertical bending at root (conservative upper bound — both contributions summed):
+        // In flight: thrust (up) and arm self-weight (down) act in OPPOSITE directions.
+        // Net vertical bending at root = tip_force × L − arm_weight_contribution.
         const double F_tip_z = Tmax - m_motor * g;
-        const double M_v = F_tip_z * L + m_arm * g * L / 2.0;
+        const double M_v = F_tip_z * L - m_arm * g * (L / 2.0);
 
         // Horizontal bending: yaw reaction torque about Z acts as bending moment at root.
         const double M_h = cT * Tmax;
