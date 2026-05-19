@@ -8,7 +8,6 @@ vcpkg_from_github(
         0001-doxygen.patch
         0002-find-tbb.patch
         0003-disable-werror.patch
-        0004-support-eigen3-5.patch
 )
 
 # Fix: stdext::make_unchecked_array_iterator and stdext::make_checked_array_iterator
