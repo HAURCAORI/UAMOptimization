@@ -1,422 +1,214 @@
-# FrameworkCpp — Spatial Element Extension Manual
+# FrameworkCpp Spatial Element Manual
 
-This manual explains how to implement a new `SpatialElement` and integrate it into `HexacopterArchitecture`. It covers the required interface, available geometry primitives, capability mix-ins, anchor frame usage, and the attachment system.
+This manual explains how to add or modify `SpatialElement` implementations and how they interact with the assembly, packaging, structural, propulsion, and battery subsystems.
 
----
+## Core interface
 
-## 1. The SpatialElement Interface
+Every element implements `SpatialElement` from [SpatialElement.hpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/include/core/SpatialElement.hpp:1).
 
-Every element in the scene graph derives from `SpatialElement` (`include/core/SpatialElement.hpp`). The contract is:
+Required responsibilities:
 
-```cpp
-class SpatialElement {
-public:
-    virtual std::string id() const = 0;           // unique string identifier
-    virtual std::string type() const = 0;          // human-readable class name
-    virtual std::unique_ptr<SpatialElement> clone() const = 0; // deep copy
+- identify itself with `id()` and `type()`
+- support deep copy through `clone()`
+- register and rebind parameters
+- register constraints
+- provide mass, COM, inertia, local geometry, local pose, and anchors
+- recompute all derived state inside `updateFromParameters()`
 
-    // Parameter lifecycle
-    virtual void registerParameters(ParameterRegistry&) = 0;
-    virtual void rebindParameters(ParameterRegistry&) = 0;
-    virtual void registerConstraints(ConstraintRegistry&) const = 0;
+For most element types, derive from `BasicSpatialElement` in [Elements.hpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/include/core/Elements.hpp:1) instead of implementing storage manually.
 
-    // Physical properties (updated by updateFromParameters)
-    virtual double mass() const = 0;
-    virtual Eigen::Vector3d localCOM() const = 0;
-    virtual Eigen::Matrix3d localInertiaAtLocalCOM() const = 0;
+## Capability interfaces
 
-    // Geometry and pose
-    virtual GeometryPrimitives localPrimitives() const = 0;
-    virtual Eigen::Isometry3d localPose() const = 0;
-    virtual std::vector<AnchorFrame> anchors() const = 0;
-    virtual std::optional<Eigen::Isometry3d> anchorPose(std::string_view) const = 0;
+Elements opt into framework subsystems by implementing capability interfaces from [ElementCapabilities.hpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/include/core/ElementCapabilities.hpp:1).
 
-    // Called whenever any parameter changes
-    virtual void updateFromParameters() = 0;
-};
-```
+### `IPropulsionRotor`
 
-`BasicSpatialElement` (`include/core/Elements.hpp`) provides default storage for all properties and implements everything except `registerParameters`, `rebindParameters`, `registerConstraints`, `clone`, and `updateFromParameters`. Derive from it to avoid boilerplate.
+Use when the element represents a thrust-producing rotor disk.
 
----
+- contributes rotor position to the allocation matrix
+- contributes yaw sign through `yawMomentSign()`
+- participates in rotor clearance checks
 
-## 2. Capability Mix-in Interfaces
+### `IStructuralMember`
 
-Declare these on your class to opt into framework subsystems.
+Use when the element contributes structural span and optionally frame mass.
 
-### 2.1 `IPropulsionRotor`
+- `structuralSpanContribution()` feeds structural span metrics
+- `contributesToFrameMass()` controls whether the element counts toward frame mass
 
-Marks an element as a rotor that contributes to the allocation matrix and packaging clearance check.
+### `IStructuralBeam`
 
-```cpp
-class IPropulsionRotor {
-public:
-    virtual int rotorIndex() const = 0;     // 0-based index into B columns
-    virtual double yawMomentSign() const = 0; // +1 or -1
-};
-```
+Use when the structural analyzer needs cross-section properties.
 
-`VehicleScalingModel` queries this interface to build the $4\times 6$ allocation matrix. The rotor's world-frame position (from the assembly) determines the thrust and pitch/roll rows. `yawMomentSign() * cT` sets the yaw row.
+- extends `IStructuralMember`
+- provides outer radius, inner radius, area, and second moment of area
+- required for the current arm structural safety analysis
 
-**When to use:** any rotating disk that generates thrust and a reaction torque.
+### `IMotorMassContributor`
 
-### 2.2 `IStructuralMember`
+Use for concentrated motor-class masses whose world positions affect inertia buildup.
 
-Marks an element whose length contributes to the total arm span (used in the bending index).
+### `IPayloadMassContributor`
 
-```cpp
-class IStructuralMember {
-public:
-    virtual double structuralSpanContribution() const = 0; // [m]
-    virtual bool contributesToFrameMass() const = 0;
-};
-```
+Use for the payload element whose mass should be reported as payload mass in the physical model.
 
-`structuralSpanContribution()` should return the physical span of the member (e.g. the length of the first segment primitive). When `contributesToFrameMass()` returns `true`, the element's mass is summed into `PhysicalModel::frame_mass`.
+### `IEnergyStorage`
 
-**When to use:** beams, booms, or any load-bearing member whose length drives structural sizing.
+Use for battery-like elements that expose stored-energy mass through `batteryMass()`.
 
-### 2.3 `IMotorMassContributor`
+## Geometry primitives
 
-Tags an element as a motor-class mass whose world position is used to correct the body inertia tensor.
+Geometry primitives are defined in [GeometryPrimitive.hpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/include/core/GeometryPrimitive.hpp:1).
 
-```cpp
-class IMotorMassContributor {
-    // tag only — no methods
-};
-```
+Available helpers:
 
-`VehicleScalingModel` subtracts the inertia contribution of each tagged element from the baseline body inertia ($I_{x,0}$, $I_{y,0}$) and adds the geometrically computed value.
+- `makeSphere(radius, padding)`
+- `makeBox(half_extents, padding)`
+- `makeCylinder(radius, length, padding)`
+- `makeDisk(radius, padding)`
+- `makeSegment(length, padding)`
 
-**When to use:** motor, ESC, or any concentrated mass at the rotor mount.
+Guidance:
 
-### 2.4 `IPayloadMassContributor`
+- use `makeDisk()` for rotors
+- use `makeSegment()` for beams / arms
+- use `makeBox()` for body or battery volumes
+- use padding only when you want the packaging check to treat the element as effectively larger than its raw geometry
 
-Tags an element whose `mass()` is recorded as the payload mass in `PhysicalModel`. Only one element should carry this tag per architecture.
+## Anchors and attachments
 
-```cpp
-class IPayloadMassContributor {
-    // tag only — no methods
-};
-```
+Anchors are named local poses stored on each element. Attachments connect a parent anchor to a child anchor.
 
-**When to use:** cargo container, passenger pod, or any mission payload.
+Current attachment machinery lives in [Attachment.hpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/include/core/Attachment.hpp:1).
 
----
+Relationship helpers:
 
-## 3. Geometry Primitives
+- `AttachmentRelationship::rigidMount()`
+- `AttachmentRelationship::localOffset(offset)`
+- `AttachmentRelationship::mirroredLocalOffset(offset, mirror_signs)`
 
-Primitives define the element's bounding geometry for clearance checking and visualisation. They are expressed in the element's local frame.
+Contact policies:
 
-All primitives support an optional `padding` [m] that expands the effective boundary.
+- `enforce_clearance`: parent and child geometry must not overlap
+- `allow_touch`: contact at zero clearance is acceptable
+- `bonded_overlap`: overlap is allowed and exempted from packaging checks
 
-### 3.1 `makeSphere(radius, padding = 0)`
+Important rule:
 
-A sphere centred at the primitive's local pose origin.
+- update anchors inside `updateFromParameters()` whenever anchor locations depend on design parameters
 
-```cpp
-primitives_ = {GeometryPrimitive::makeSphere(0.60)};
-```
+## Current built-in elements
 
-**Use for:** roughly isotropic objects (payload pods, sensor balls).
+### `BodyElement`
 
-### 3.2 `makeBox(extents, padding = 0)`
+- consumes `Lx`, `Lyi`, `Lyo`
+- provides the central body box and body anchors
+- registers `body_span_order`
 
-An axis-aligned box. `extents` is the **half-extent** vector $(h_x, h_y, h_z)$.
+### `ArmElement`
 
-```cpp
-primitives_ = {GeometryPrimitive::makeBox({0.35, 0.25, 0.12}, 0.02)};
-```
+- consumes `Lx`, `Lyi`, `Lyo`, `arm_outer_radius`, `arm_wall_thickness`
+- implements `IStructuralBeam` and `ILoadReceiver`
+- registers `arm_length_positive`
+- provides span and section data to the structural analyzer
 
-**Use for:** batteries, fuselage sections, avionics bays.
+### `MotorElement`
 
-### 3.3 `makeCylinder(radius, length, padding = 0)`
+- consumes `T_max`
+- implements `IMotorMassContributor`
+- registers `motor_thrust_positive`
 
-A cylinder. The axis is along the primitive's local x-direction by default; rotate the `local_pose` to change the orientation.
+### `RotorElement`
 
-```cpp
-GeometryPrimitive cyl = GeometryPrimitive::makeCylinder(0.10, 0.15, 0.01);
-cyl.local_pose.linear() =
-    Eigen::AngleAxisd(M_PI / 2.0, Eigen::Vector3d::UnitX()).toRotationMatrix();
-primitives_ = {cyl};
-```
+- consumes `d_prop`
+- implements `IPropulsionRotor`
+- registers `rotor_diameter_positive`
 
-**Use for:** motor cans, tanks, tubes.
+### `BatteryElement`
 
-### 3.4 `makeDisk(radius, padding = 0)`
+- consumes `m_bat`, `T_max`, `d_prop`
+- implements `IEnergyStorage`
+- contributes actual mass to the vehicle
+- registers `battery_mass_positive`
 
-A flat disk (zero thickness). The disk lies in the primitive's local xy-plane.
+### `PayloadElement`
 
-```cpp
-primitives_ = {GeometryPrimitive::makeDisk(0.5 * d_prop_, 0.01)};
-```
+- consumes `m_payload`
+- implements `IPayloadMassContributor`
+- registers `payload_mass_nonnegative`
 
-**Use for:** rotor disks; the clearance algorithm computes disk-to-disk separation using this primitive.
+## Default builder flow
 
-### 3.5 `makeSegment(length, padding = 0)`
+The default architecture is assembled in [DefaultHexacopterBuilder.cpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/src/core/DefaultHexacopterBuilder.cpp:1).
 
-A line segment along the primitive's local x-axis from the origin to $(length, 0, 0)$.
+Element creation:
 
-```cpp
-primitives_ = {GeometryPrimitive::makeSegment(arm_length, 0.05)};
-```
+- body
+- battery
+- payload
+- 6 arms
+- 6 motors
+- 6 rotors
 
-**Use for:** arms, spars, cables. The segment length is what `IStructuralMember::structuralSpanContribution()` should return.
+Attachment pattern:
 
----
+- root -> body
+- body -> battery
+- body -> payload
+- body -> each arm
+- arm -> motor
+- motor -> rotor
 
-## 4. Anchor Frames
+If you introduce a new default element, update both:
 
-An `AnchorFrame` is a named local pose used by the attachment system. Declare as many as needed; the attachment specifies which parent anchor and child anchor to align.
+- `DefaultHexacopterParameters`
+- `DefaultHexacopterBuilder::buildElements()` and possibly `buildAttachments()`
 
-```cpp
-// Convention: anchor at the element's origin
-setAnchor("center", Eigen::Isometry3d::Identity());
+## Step-by-step element extension
 
-// Anchor at the end of an arm
-Eigen::Isometry3d tip = Eigen::Isometry3d::Identity();
-tip.translation() = Eigen::Vector3d(arm_length, 0.0, 0.0);
-setAnchor("tip", tip);
-```
+1. Add the class declaration in a header.
+2. Derive from `BasicSpatialElement`.
+3. Add parameter pointers as members.
+4. Implement `clone()`.
+5. In `registerParameters()`, call `parameter->addConsumer(id_)` for every consumed parameter.
+6. In `rebindParameters()`, reacquire parameters from `ParameterRegistry`.
+7. In `registerConstraints()`, capture stable IDs, not raw parameter pointers.
+8. In `updateFromParameters()`, recompute:
+   - `mass_`
+   - `local_com_`
+   - `local_inertia_`
+   - `primitives_`
+   - `anchors_`
+9. Add the element to the default builder or architecture.
+10. Register any new files in `FrameworkCpp.vcxproj`.
 
-Anchors must be set (or re-set) inside `updateFromParameters()` because their positions may depend on parameter values.
+## Constraint registration guidance
 
----
+Prefer this pattern inside `registerConstraints()`:
 
-## 5. Attachment Contact Policies
+1. capture `stable_id`
+2. refetch the parameter from `context.architecture.parameters()` inside the lambda
+3. build a small `Constraint` object with the target sense / threshold
+4. return `constraint.evaluate(measured_value)`
 
-When two elements are attached, the contact policy controls whether their geometry is exempted from clearance checking.
+Do not capture raw `DesignParameter*` directly in the lambda. Elements are cloned and rebound, so pointer capture is the wrong lifetime.
 
-| Policy | Effect |
-|---|---|
-| `enforce_clearance` | Primitives of parent and child must not overlap. |
-| `allow_touch` | Primitives may touch (clearance ≥ 0) but not overlap. |
-| `bonded_overlap` | Primitives may freely overlap. Propagates up the chain: all ancestors with `bonded_overlap` are mutually exempted from clearance checking. |
+## Common mistakes
 
-Use `bonded_overlap` for elements that are bolted together (arm-to-motor, motor-to-rotor). Use `enforce_clearance` between independently positioned elements (rotor-to-rotor).
+- forgetting to call `addConsumer()` for a parameter
+- forgetting to rebind parameters after cloning
+- setting anchors only once in the constructor instead of `updateFromParameters()`
+- registering new files in the filesystem but not in `FrameworkCpp.vcxproj`
+- using an element capability that does not match the analyzer expectations
+- adding a new structural beam but not supplying `IStructuralBeam` section properties
 
----
+## Validation checklist
 
-## 6. Attachment Relationship Kinds
+After adding an element:
 
-The `AttachmentRelationship` struct encodes how the child's anchor is positioned relative to the parent's anchor.
-
-| Kind | Factory | Description |
-|---|---|---|
-| `rigid_mount` | `AttachmentRelationship::rigidMount()` | Child anchor coincides with parent anchor. No additional transform. |
-| `local_offset` | `AttachmentRelationship::localOffset({dx, dy, dz})` | Translate child anchor by a fixed offset in the parent's local frame. |
-| `mirrored_local_offset` | `AttachmentRelationship::mirroredLocalOffset(offset, signs)` | As above but each component is multiplied by the corresponding sign ($\pm 1$). Used for symmetric pairs (e.g. left/right arms sharing one template attachment). |
-
-A fully custom transform can also be supplied as a `std::function<Eigen::Isometry3d(const HexacopterArchitecture&)>` in the attachment's `relative_transform` field. This is how the arm mounts are computed from the parameter-dependent motor positions.
-
----
-
-## 7. Step-by-Step: Adding a New Element
-
-### Step 1 — Declare the class
-
-Create a header in `include/core/` or your own include directory.
-
-```cpp
-#include "core/Elements.hpp"
-
-namespace hexaarch::core {
-
-class WingletElement final : public BasicSpatialElement, public IStructuralMember {
-public:
-    WingletElement(std::string id, DesignParameter* span);
-
-    std::unique_ptr<SpatialElement> clone() const override;
-    void registerParameters(ParameterRegistry& registry) override;
-    void rebindParameters(ParameterRegistry& registry) override;
-    void registerConstraints(ConstraintRegistry& registry) const override;
-    void updateFromParameters() override;
-
-    // IStructuralMember
-    double structuralSpanContribution() const override;
-    bool contributesToFrameMass() const override { return false; }
-
-private:
-    DesignParameter* span_;
-};
-
-} // namespace hexaarch::core
-```
-
-### Step 2 — Implement the source
-
-```cpp
-#include "core/WingletElement.hpp"
-
-namespace hexaarch::core {
-
-WingletElement::WingletElement(std::string id, DesignParameter* span)
-    : BasicSpatialElement(std::move(id), "WingletElement"),
-      span_(span) {}
-
-std::unique_ptr<SpatialElement> WingletElement::clone() const {
-    return std::make_unique<WingletElement>(*this);
-}
-
-void WingletElement::registerParameters(ParameterRegistry&) {
-    span_->addConsumer(id_);
-}
-
-void WingletElement::rebindParameters(ParameterRegistry& registry) {
-    span_ = registry.find(span_->stable_id());
-    if (!span_) throw std::invalid_argument("Missing parameter: " + span_->stable_id());
-}
-
-void WingletElement::registerConstraints(ConstraintRegistry& registry) const {
-    const std::string pid = span_->stable_id();
-    registry.add({
-        "winglet_span_positive", id_,
-        ConstraintSense::greater_equal, 0.0,
-        true, true, 500.0,
-        [pid](const ConstraintEvaluationContext& ctx) {
-            const auto& p = *ctx.architecture.parameters().find(pid);
-            Constraint c{"winglet_span_positive", "winglet", ConstraintSense::greater_equal, 0.0};
-            return c.evaluate(p.value);
-        }
-    });
-}
-
-void WingletElement::updateFromParameters() {
-    const double half_span = 0.5 * span_->value;
-    mass_ = 3.5 * span_->value;   // 3.5 kg/m linear density
-    local_com_ = Eigen::Vector3d(half_span, 0.0, 0.0);
-    local_inertia_.setZero();
-    local_inertia_(1, 1) = mass_ * span_->value * span_->value / 12.0;
-    local_inertia_(2, 2) = local_inertia_(1, 1);
-    primitives_ = {GeometryPrimitive::makeSegment(span_->value, 0.04)};
-    anchors_.clear();
-    setAnchor("root", Eigen::Isometry3d::Identity());
-    Eigen::Isometry3d tip = Eigen::Isometry3d::Identity();
-    tip.translation() = Eigen::Vector3d(span_->value, 0.0, 0.0);
-    setAnchor("tip", tip);
-}
-
-double WingletElement::structuralSpanContribution() const {
-    return primitives_.empty() ? 0.0 : primitives_.front().dimensions.x();
-}
-
-} // namespace hexaarch::core
-```
-
-### Step 3 — Register a new parameter (if needed)
-
-In `HexacopterArchitecture::registerDefaultParameters()` (or before calling `addElement`):
-
-```cpp
-parameters_.add({
-    "b_winglet",          // name
-    id_,                  // owner
-    "m",                  // unit
-    "Winglet span",       // description
-    1.20,                 // default value
-    0.50, 3.00,           // [lower, upper] bounds
-    1.20,                 // default_value (repeated)
-    true,                 // active (included in design vector)
-    1.0                   // scale
-});
-```
-
-### Step 4 — Add the element to the architecture
-
-If extending `DefaultHexacopterBuilder`, add the instantiation to `buildElements()`:
-
-```cpp
-auto* b_winglet = parameters_.find(id_ + "::b_winglet");
-elements.push_back(std::make_unique<WingletElement>("winglet_left", b_winglet));
-```
-
-If adding at runtime to an existing architecture object:
-
-```cpp
-HexacopterArchitecture arch;
-arch.parameters().add({...});        // register parameter first
-auto element = std::make_unique<WingletElement>("winglet_left", arch.parameters().find("..::b_winglet"));
-arch.addElement(std::move(element)); // registers, updates, rebinds automatically
-```
-
-### Step 5 — Define the attachment
-
-```cpp
-Eigen::Isometry3d winglet_pose = Eigen::Isometry3d::Identity();
-winglet_pose.linear() = Eigen::AngleAxisd(M_PI / 2.0, Eigen::Vector3d::UnitZ()).toRotationMatrix();
-
-arch.addAttachment({
-    "body",          // parent element id
-    "winglet_left",  // child element id
-    "top",           // parent anchor
-    "root",          // child anchor
-    AttachmentRelationship::rigidMount(),
-    true,            // enabled
-    "",              // symmetry_tag (set for mirrored pairs)
-    AttachmentContactPolicy::bonded_overlap,
-    [winglet_pose](const HexacopterArchitecture&) { return winglet_pose; }
-});
-arch.rebuildAssembly();
-```
-
-### Step 6 — Verify
-
-```cpp
-Stage1Evaluator evaluator;
-EvaluationContext ctx;
-auto result = evaluator.evaluate(arch, ctx);
-
-std::cout << "Feasible: " << result.feasible << "\n";
-std::cout << "Mass: " << result.stage1.mass << "\n";
-```
-
----
-
-## 8. Available Spatial Element Types (Built-In)
-
-| Class | Type string | Key parameters | Capabilities |
-|---|---|---|---|
-| `BodyElement` | `"BodyElement"` | $L_x$, $L_{yi}$, $L_{yo}$ | — |
-| `ArmElement` | `"ArmElement"` | $L_x$, $L_{yi}$, $L_{yo}$, $T_{max}$ | `IStructuralMember` |
-| `MotorElement` | `"MotorElement"` | $T_{max}$ | `IMotorMassContributor` |
-| `RotorElement` | `"RotorElement"` | $d_{prop}$ | `IPropulsionRotor` |
-| `BatteryElement` | `"BatteryElement"` | $T_{max}$, $d_{prop}$ | — |
-| `PayloadElement` | `"PayloadElement"` | $m_{pay}$ | `IPayloadMassContributor` |
-
----
-
-## 9. Constraint Registration Guidelines
-
-- Call `registry.add(...)` in `registerConstraints()`, not in `updateFromParameters()`.
-- Capture only the parameter **stable ID** (`parameter->stable_id()`) in the lambda — never a raw pointer, because elements are cloned and rebinding changes pointer addresses.
-- Inside the lambda, re-fetch the parameter via `requireParameter(context.architecture.parameters(), stable_id)`.
-- Set `hard = true` for geometric and physical limits that make the design infeasible.
-- Set `active = true` so the constraint is evaluated; set to `false` to disable temporarily.
-- Choose a penalty in proportion to the severity: 500–1000 for auxiliary checks, 1500–2000 for safety-critical bounds.
-
----
-
-## 10. Parameter Naming Conventions
-
-| Field | Convention | Example |
-|---|---|---|
-| `name` | short snake_case | `"b_winglet"` |
-| Stable ID | `"<arch-id>::<name>"` | `"default-architecture::b_winglet"` |
-| `unit` | SI symbol string | `"m"`, `"N"`, `"kg"`, `"-"` |
-| `description` | sentence fragment | `"Winglet semi-span"` |
-| `scale` | keep at 1.0 | 1.0 |
-
-The stable ID is used by the optimizer (`DesignVectorMapper`) and by constraint lambdas to locate parameters after cloning. Always derive it via `parameter->stable_id()` rather than constructing the string manually.
-
----
-
-## 11. Assembly Validation
-
-After calling `rebuildAssembly()` or `addElement()`, the assembly checks for:
-
-- **Orphaned elements** — every element must have an attachment path to the tree root. An exception is thrown for elements with no attachment.
-- **Multiple parents** — each element may have at most one parent attachment. A second attachment to the same child raises an exception.
-- **Cycles** — circular attachment chains are detected and raise an exception.
-- **Odd-count symmetry tags** — a warning is printed if a `symmetry_tag` appears an odd number of times (expected to come in mirrored pairs).
-
-Rotor coincidence (two rotors at the same world position) is logged as a warning but does not throw.
+1. build succeeds
+2. `updateFromParameters()` changes geometry as expected
+3. assembly rebuild completes without orphan or cycle errors
+4. packaging behaves as intended
+5. exported JSON contains the expected physical-model changes
+6. constraint results show the new constraint if one was added

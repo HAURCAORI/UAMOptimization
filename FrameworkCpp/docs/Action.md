@@ -1,232 +1,116 @@
-# Action Guide: Extending FrameworkCpp
+# FrameworkCpp Action Guide
 
-This document lists **every file that must be changed** for each common extension task.
-Follow it in order; skipping a step causes silent omissions in export, console, or optimization.
+This guide is the short "what do I have to touch?" reference for common codebase changes.
 
----
+Use it together with:
 
-## RULE: Every new `.cpp` or `.hpp` file must be registered in the VS project
+- `docs/Manual.md` for element and attachment mechanics
+- `docs/Optimization.md` for the evaluation and optimizer flow
+- `docs/Optimization_Constraints_And_Design_Variables.md` for the current optimization variables and hard constraints
 
-Any new source or header file added under `FrameworkCpp/` **must** be listed in
-`FrameworkCpp/FrameworkCpp.vcxproj` before it will compile or link. Omitting this step
-causes linker errors ("unrecognized symbol") with no indication of which file is missing.
+## Rule: register new files in the Visual Studio project
+
+Any new `.cpp` or `.hpp` file under `FrameworkCpp/` must be added to `FrameworkCpp.vcxproj`.
+
+Add source files under the existing `ClCompile` item group:
 
 ```xml
-<!-- Under the existing <ItemGroup> with <ClCompile> entries: -->
 <ClCompile Include="src\path\to\NewFile.cpp" />
+```
 
-<!-- Under the existing <ItemGroup> with <ClInclude> entries: -->
+Add headers under the existing `ClInclude` item group:
+
+```xml
 <ClInclude Include="include\path\to\NewFile.hpp" />
 ```
 
-**All four configurations (Win32/x64 × Debug/Release) share the same item groups** — add once
-and it applies to all. See **Section G** for the full procedure.
+If you skip this, the project may compile partially and then fail at link time with unresolved symbols.
 
----
+## Add a design parameter
 
----
+1. Register it in `src/core/HexacopterArchitecture.cpp` inside `registerDefaultParameters()`.
+2. Bind a member pointer in `bindCanonicalParameters()`.
+3. Declare the pointer in `include/core/HexacopterArchitecture.hpp`.
+4. Thread the pointer through `DefaultHexacopterParameters` in [DefaultHexacopterBuilder.hpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/include/core/DefaultHexacopterBuilder.hpp:1).
+5. Pass it into the element constructor in [DefaultHexacopterBuilder.cpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/src/core/DefaultHexacopterBuilder.cpp:1).
+6. Store, rebind, and consume it in the element class in `include/core/Elements.hpp` and `src/core/Elements.cpp`.
 
-## A. Adding a New Design Parameter
+Notes:
 
-A design parameter is a scalar knob the optimizer can tune (e.g., arm length, tube radius).
+- Set `active=true` only if the parameter should enter the pagmo design vector.
+- Export wiring is mostly automatic once the parameter is active. `PagmoProblemAdapter`, `DesignVectorMapper`, `CsvExporter`, and `ComparisonReporter` already iterate active parameters.
 
-### Step 1 — Register in `HexacopterArchitecture`
-File: `src/core/HexacopterArchitecture.cpp`
-- In `registerDefaultParameters()`: call `parameters_.add({name, id_, unit, description, default, lower, upper, default, active, scale})`.
-- In `bindCanonicalParameters()`: `ptr_ = parameters_.find(id_ + "::" + name)`.
-- Declare the pointer in `include/core/HexacopterArchitecture.hpp` as `DesignParameter* name_ = nullptr`.
+## Add a Stage 1 metric
 
-### Step 2 — Thread the pointer to the element that uses it
-File: `include/core/DefaultHexacopterBuilder.hpp`
-- Add `DesignParameter* new_param = nullptr` to `DefaultHexacopterParameters`.
+1. Add the field to `Stage1Metrics` in [EvaluationResult.hpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/include/evaluation/EvaluationResult.hpp:1).
+2. Compute it in [Stage1Evaluator.cpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/src/evaluation/Stage1Evaluator.cpp:1).
+3. If it should be an objective, add a default entry in [EvaluationContext.hpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/include/evaluation/EvaluationContext.hpp:1).
+4. Append it in [ObjectiveAggregator.cpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/src/evaluation/ObjectiveAggregator.cpp:1).
+5. Export it in `CsvExporter.cpp` if it should appear in JSON or CSV summaries.
+6. Add it to `ComparisonReporter.cpp` if it belongs in the comparison table.
 
-File: `src/core/DefaultHexacopterBuilder.cpp`
-- In `buildElements()` (or `buildAttachments()`): set `params.new_param = architecture.new_param_` and pass it to the element constructor.
+## Add a hard constraint
 
-### Step 3 — Consume the parameter in the element
-File: `include/core/Elements.hpp`
-- Add `DesignParameter* new_param_` member and any derived cached values.
-- Add the parameter to the constructor signature.
+There are two common places:
 
-File: `src/core/Elements.cpp`
-- In the constructor: assign `new_param_ = new_param` and call `new_param_->addConsumer(id_)`.
-- In `rebindParameters()`: re-assign the pointer.
-- In `updateFromParameters()`: compute derived geometry from `new_param_->value`.
+- System-level constraints: `HexacopterArchitecture::registerDefaultConstraints()`
+- Element-level constraints: `SpatialElement::registerConstraints()`
 
-### Step 4 — Rebuild passes through automatically
-`HexacopterArchitecture::rebuildElements()` calls `rebuildAttachments()` which calls
-`rebuildAssembly()`. After parameter registration and pointer binding these are all called
-through `rebuildAssembly()`. No additional wiring needed here.
+Checklist:
 
-### Step 5 — Verify export (nothing to change if done correctly)
-- `PagmoProblemAdapter::problem()` iterates `activeParameters()` — new param is picked up automatically.
-- `DesignVectorMapper` packs/unpacks all active params automatically.
-- `CsvExporter::writeSooParametersCsv` / `writeParetoParametersCsv` use `problem.parameter_ids` — automatic.
-- `ComparisonReporter::parametersTable` uses the same — automatic.
+1. Decide where the constraint belongs.
+2. Register it with a stable ID, sense, threshold, `active=true`, `hard=true`, and a penalty weight.
+3. Read current values through `ConstraintEvaluationContext`.
+4. Make sure the required physical or Stage 1 data is populated before constraint evaluation.
 
-**Nothing to change in export code if the parameter is wired in Steps 1–3.**
+Notes:
 
----
+- Constraints are already exported through `EvaluationResult.constraint_results`.
+- `PagmoProblemAdapter` applies penalties automatically using the registered penalty weights.
 
-## B. Adding a New Stage 1 Metric
+## Add a new element type
 
-A Stage 1 metric is a scalar performance indicator computed during evaluation
-(e.g., structural_safety, efficiency margin).
+1. Declare the class in a header, usually under `include/core/`.
+2. Implement it in a `.cpp` file.
+3. Derive from `BasicSpatialElement`.
+4. Implement:
+   - `clone()`
+   - `registerParameters()`
+   - `rebindParameters()`
+   - `registerConstraints()`
+   - `updateFromParameters()`
+5. Add any capability interfaces needed, such as `IPropulsionRotor`, `IStructuralBeam`, `IMotorMassContributor`, `IPayloadMassContributor`, or `IEnergyStorage`.
+6. Instantiate it in `DefaultHexacopterBuilder` or add it programmatically to `HexacopterArchitecture`.
+7. Register the new files in `FrameworkCpp.vcxproj`.
 
-### Step 1 — Declare the field
-File: `include/evaluation/EvaluationResult.hpp`
-- Add `double new_metric = 0.0` to `Stage1Metrics`.
+## Add a physical-model field
 
-### Step 2 — Compute and assign the value
-File: `src/evaluation/Stage1Evaluator.cpp`
-- After the existing metric computations, set `result.stage1.new_metric = ...`.
+1. Add the field to the relevant struct in [PhysicsTypes.hpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/include/physics/PhysicsTypes.hpp:1).
+2. Populate it in:
+   - `VehicleScalingModel` for geometry / mass / propulsion level data, or
+   - a dedicated analyzer invoked by `Stage1Evaluator`
+3. Export it in `CsvExporter.cpp` if it should appear in saved artifacts.
 
-### Step 3 — Register as an objective (optional)
-File: `include/evaluation/EvaluationContext.hpp`
-- Add `{"new_metric", 0.0}` to `objective_weights` initializer (weight 0.0 = inactive by default).
+## Add a new output artifact
 
-File: `src/evaluation/ObjectiveAggregator.cpp`
-- Add `append("new_metric", result.stage1.new_metric)`.
+1. Add a `CsvExporter::write*()` method in `include/analysis/CsvExporter.hpp` and `src/analysis/CsvExporter.cpp`.
+2. Call it from the relevant command path in [app/main.cpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/app/main.cpp:1).
+3. Add a console summary line if the output should be advertised to the user.
 
-### Step 4 — Export
-File: `src/analysis/CsvExporter.cpp`
-- In `stage1ToJson()`: add `{"new_metric", m.new_metric}` to the JSON object.
-- In `summaryTable()` in `ComparisonReporter.cpp`: add column name to `kColumns` and
-  the value in the data loop.
-- In `writeParetoCsv()`: add the column header and value if needed for MOO export.
+## Add a new SOO or MOO objective
 
----
+1. Make sure the metric exists in `Stage1Metrics`.
+2. Add it to the default `objective_weights` list if weighted-sum SOO should know about it.
+3. Append it in `ObjectiveAggregator.cpp`.
+4. If MOO should expose it, include its name in `MooRunConfig::objective_names`.
+5. If CLI defaults should use it, update `main.cpp`.
 
-## C. Adding a New Constraint
+## Before you stop
 
-### Step 1 — Register in `HexacopterArchitecture`
-File: `src/core/HexacopterArchitecture.cpp`
-- In `registerDefaultConstraints()`:
-  ```cpp
-  constraints_.add({
-      "constraint_id", id_,
-      ConstraintSense::greater_equal,   // or less_equal
-      threshold_value,
-      /*active=*/true,
-      /*hard=*/true,
-      penalty_weight,
-      [](const ConstraintEvaluationContext& ctx) {
-          // read from ctx.physical_model or ctx.evaluation_context
-          Constraint c{"constraint_id", ctx.architecture.id(), ConstraintSense::greater_equal, threshold};
-          return c.evaluate(measured_value);
-      }
-  });
-  ```
+Run through this quick sanity list:
 
-### Step 2 — Ensure the physical data is populated before constraint evaluation
-Constraints run after `Stage1Evaluator::evaluate()`. Any data needed by the lambda
-must be set in `PhysicalModel` by that point (see `StructuralAnalyzer` for an example).
-
-### Step 3 — Export (automatic)
-`CsvExporter` already serialises all `constraint_results` from `EvaluationResult`.
-`ComparisonReporter::summaryTable` shows the worst violated constraint — no change needed.
-
----
-
-## D. Adding a New Element Type
-
-### Step 1 — Declare the element class
-File: `include/core/Elements.hpp`
-- Inherit from `BasicSpatialElement` and any capability interfaces needed
-  (`IStructuralBeam`, `ILoadReceiver`, `IPropulsionRotor`, etc.).
-- Add constructor, parameter pointers, capability method declarations.
-
-### Step 2 — Implement the element
-File: `src/core/Elements.cpp`
-- Implement constructor (assign params, call `addConsumer`), `rebindParameters()`,
-  `updateFromParameters()`, and all capability methods.
-
-### Step 3 — Instantiate in the builder
-File: `src/core/DefaultHexacopterBuilder.cpp`
-- In `buildElements()` or `buildAttachments()`: create the element and add it to the
-  architecture via `architecture.addElement(...)`.
-
-### Step 4 — Register any new parameters
-Follow **Section A** for each new parameter the element consumes.
-
-### Step 5 — Register in vcxproj (Visual Studio)
-Follow **Section G** exactly. Failure to do this causes a linker error for every symbol
-defined in the new `.cpp` file.
-
----
-
-## E. Adding a New Physical Model Field
-
-A physical model field stores intermediate physics results (e.g., per-arm structural data).
-
-### Step 1 — Declare the field
-File: `include/physics/PhysicsTypes.hpp`
-- Add the field to the appropriate struct (`PhysicalModel`, `PropulsionProxy`,
-  `StructuralProxy`, etc.). Add a new sub-struct if needed.
-
-### Step 2 — Populate the field
-Either in `VehicleScalingModel` (for geometry/mass/propulsion) or in a dedicated
-analyzer called from `Stage1Evaluator::evaluate()` (for derived physics like structural analysis).
-If you create a new `.cpp`/`.hpp` pair for the analyzer, follow **Section G** to register it.
-
-### Step 3 — Expose in export
-File: `src/analysis/CsvExporter.cpp`
-- In `physicalModelToJson()`: add the new field to the returned JSON object.
-
----
-
-## F. Adding a New Output File Format
-
-File: `include/analysis/CsvExporter.hpp` + `src/analysis/CsvExporter.cpp`
-- Add a static `write*()` method.
-- Call it from the appropriate `runSoo()`, `runMoo()`, or `runCompare()` in `app/main.cpp`.
-- Print the result in the console export summary line.
-
----
-
-## G. Registering New Files in the Visual Studio Project
-
-Any new `.cpp` or `.hpp` file added anywhere under `FrameworkCpp/` must be listed in
-`FrameworkCpp/FrameworkCpp.vcxproj`. This includes new evaluators, analyzers, element types,
-utility classes, or headers — anything that is not already in the project file.
-
-**Symptom when skipped:** linker error `LNK2019: unrecognized external symbol` or
-`LNK2001: unresolved external symbol` referencing functions defined in the new file.
-
-### Step 1 — Locate the item groups
-
-Open `FrameworkCpp/FrameworkCpp.vcxproj` and find:
-- The `<ItemGroup>` that contains `<ClCompile Include="src\...` entries (compiled sources).
-- The `<ItemGroup>` that contains `<ClInclude Include="include\...` entries (headers).
-
-### Step 2 — Add the new entries
-
-```xml
-<!-- In the ClCompile ItemGroup — one entry per new .cpp file: -->
-<ClCompile Include="src\subsystem\NewAnalyzer.cpp" />
-
-<!-- In the ClInclude ItemGroup — one entry per new .hpp file: -->
-<ClInclude Include="include\subsystem\NewAnalyzer.hpp" />
-```
-
-Use backslash `\` as the path separator (Windows project file convention).
-Paths are relative to the `FrameworkCpp/` directory (the vcxproj location).
-
-### Step 3 — Verify all four configurations are covered
-
-The item groups are shared across all four build configurations
-(Win32 Debug, Win32 Release, x64 Debug, x64 Release). Adding an entry once covers all four —
-do **not** add per-configuration `<ItemGroup Condition=...>` blocks unless the file is
-genuinely configuration-specific (almost never the case).
-
-### Step 4 — Build and confirm
-
-Rebuild the solution. A successful link with no `LNK2019`/`LNK2001` errors confirms the
-registration is correct.
-
-### Files registered per phase (reference)
-
-| Phase | New `.cpp` files | New `.hpp` files |
-|---|---|---|
-| Phase 1 (ACS) | `src/physics/AttainableControlSetAnalyzer.cpp`, `src/analysis/AcsPlotter.cpp` | matching headers |
-| Phase 2 (Powertrain/Battery) | `src/physics/PowertrainEvaluator.cpp`, `src/physics/BatteryEvaluator.cpp` | `include/physics/PowertrainEvaluator.hpp`, `include/physics/BatteryEvaluator.hpp`, `include/core/ElementCapabilities.hpp` |
+1. New files are in `FrameworkCpp.vcxproj`.
+2. New parameters are rebound after cloning.
+3. New constraints read from current context data, not stale pointers.
+4. New metrics are exported if they are intended for analysis.
+5. SOO / MOO defaults still make sense after the change.

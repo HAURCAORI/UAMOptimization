@@ -1,509 +1,226 @@
+# FrameworkCpp Optimization Overview
 
-## FrameworkCpp - Optimization Reference
+This is the top-level optimization reference for `FrameworkCpp`.
 
-This document describes the hexacopter design optimization in `FrameworkCpp`:
-design parameters, spatial element models, physical equations, constraints,
-and optimizer configuration.
+It explains the flow of data and where each optimization concern lives in the codebase. For the current variable and hard-constraint list, use `docs/Optimization_Constraints_And_Design_Variables.md`.
 
----
+## Document map
 
-## 1. Architecture Overview
+- `Optimization.md`: overall evaluation and optimizer flow
+- `Optimization_Constraints_And_Design_Variables.md`: current active variables, inactive registered parameters, and hard constraints
+- `Phase2_Powertrain_Battery.md`: powertrain and battery model details
+- `Action.md`: implementation checklist for extending the optimization stack
 
-`HexacopterArchitecture` is the root object. It owns a `ParameterRegistry`,
-a `ConstraintRegistry`, a list of `SpatialElement` objects, and a list of
-`Attachment` kinematic links. After any parameter change,
-`updateFromParameters()` re-evaluates every element and re-assembles the
-scene graph.
+## Architecture-to-objective flow
 
-Data flow:
+The optimization loop is:
 
-    ParameterRegistry --> SpatialElement x N --> AssemblyState
-                                                      |
-                                            VehicleScalingModel
-                                                      |
-                                              PhysicalModel
-                                                      |
-                                             Stage1Evaluator
-                                                      |
-                                           EvaluationResult
-                                          /               \
-                                  Stage1Metrics     ConstraintResults
+```text
+active parameters
+  -> DesignVectorMapper / BoundsBuilder
+  -> candidate HexacopterArchitecture
+  -> VehicleScalingModel
+  -> StructuralAnalyzer
+  -> AttainableControlSetAnalyzer
+  -> PowertrainEvaluator
+  -> BatteryEvaluator
+  -> hard constraint evaluation
+  -> ObjectiveAggregator
+  -> pagmo fitness
+```
 
----
+Main implementation points:
 
-## 2. Design Parameters
+- parameter registration: [HexacopterArchitecture.cpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/src/core/HexacopterArchitecture.cpp:1)
+- optimizer adapter: [PagmoProblemAdapter.cpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/src/optimization/PagmoProblemAdapter.cpp:1)
+- Stage 1 evaluation: [Stage1Evaluator.cpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/src/evaluation/Stage1Evaluator.cpp:1)
+- objective weighting: [ObjectiveAggregator.cpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/src/evaluation/ObjectiveAggregator.cpp:1)
 
-Parameters are stored in `ParameterRegistry` with stable key
-`"<architecture-id>::<name>"`.
+## Design-vector handling
 
-| Name       | Symbol  | Unit | Default | Bounds        | Active |
-|------------|---------|------|---------|---------------|--------|
-| Lx         | Lx      | m    | 2.65    | [1.0, 5.0]    | yes    |
-| Lyi        | Lyi     | m    | 2.65    | [1.0, 5.0]    | yes    |
-| Lyo        | Lyo     | m    | 5.50    | [2.5, 9.0]    | yes    |
-| T_max      | Tmax    | N    | 7327    | [8000, 16000] | yes    |
-| cT         | cT      | -    | 0.03    | [0.01, 0.08]  | no     |
-| d_prop     | d_prop  | m    | 0.40    | [0.20, 1.20]  | no     |
-| m_payload  | m_pay   | kg   | 1500    | [1000, 2500]  | no     |
+Only active parameters participate in optimization.
 
-Active parameters are included in the optimizer's design vector. Inactive
-parameters are fixed at their defaults during a run but can be set beforehand.
+`DesignVectorMapper`:
 
-**Normalization.** The optimizer works in normalized space:
+- packs active parameters into a normalized vector
+- unpacks normalized values back into the cloned architecture
+- calls `architecture.updateFromParameters()` after assignment
 
-    x_norm = (x - x_default) / scale    (scale = 1.0 for all parameters)
+`BoundsBuilder`:
 
-Normalized bounds: [x_lower - x_default, x_upper - x_default].
-The default maps to x_norm = 0.
+- returns normalized lower and upper bounds for pagmo
 
----
+`PagmoProblemAdapter::problem()`:
 
-## 3. Spatial Elements
+- exports physical bounds and parameter IDs for reporting and CSV/JSON outputs
 
-### 3.1 Reference Constants
+## Evaluation stages
 
-| Symbol    | Value          | Description                        |
-|-----------|----------------|------------------------------------|
-| m_ref     | 2240.73 kg     | Baseline total vehicle mass        |
-| m_pay_0   | 1500.0 kg      | Baseline payload mass              |
-| m_mot_0   | 74.07 kg       | Baseline motor mass                |
-| Tmax_0    | 7327.0 N       | Baseline motor maximum thrust      |
-| Lx_0      | 2.65 m         | Baseline fore/aft arm length       |
-| Lyi_0     | 2.65 m         | Baseline inner lateral arm length  |
-| Lyo_0     | 5.50 m         | Baseline outer lateral arm length  |
-| d_prop_0  | 0.40 m         | Baseline propeller diameter        |
-| Ix_0      | 12000 kg*m^2   | Baseline body inertia about x-axis |
-| Iy_0      | 9400 kg*m^2    | Baseline body inertia about y-axis |
-| g         | 9.81 m/s^2     | Gravitational acceleration         |
+### 1. Vehicle model
 
----
+`VehicleScalingModel` builds the physical model from the current architecture:
 
-### 3.2 BodyElement
+- total mass
+- COM and inertia
+- allocation matrix and faulted allocation matrices
+- packaging clearance metrics
+- structural aggregate metrics such as arm span and normalized bending index
 
-Central chassis. Zero mass; serves as the attachment root for all other
-elements.
+### 2. Structural analysis
 
-**Parameters consumed:** Lx, Lyi, Lyo
+`StructuralAnalyzer` evaluates arm section properties and loads to compute:
 
-**Geometry (box half-extents):**
+- per-arm bending stress
+- per-arm safety factor
+- minimum arm safety factor across the vehicle
 
-    hx = max(0.35, 0.10*Lx  + 0.10)
-    hy = max(0.35, 0.10*Lyi + 0.10)
-    hz = 0.20
+This is why `ArmElement` implements `IStructuralBeam` and `ILoadReceiver`.
 
-Padding = 0.05 m. Mass = 0.
+### 3. ACS / controllability analysis
 
-**Anchors:**
+`AttainableControlSetAnalyzer` evaluates:
 
-| Anchor | Local translation |
-|--------|-------------------|
-| center | (0, 0, 0)         |
-| top    | (0, 0, +hz)       |
-| bottom | (0, 0, -hz)       |
+- nominal hover trim
+- single-fault hover trims
+- ACS retention and margin metrics
+- the current hover-feasibility margin used by hard constraints
 
-**Constraints registered:**
-- `body_span_order`: min(Lx, Lyi, Lyo - Lyi) >= 0
+### 4. Powertrain analysis
 
----
+`PowertrainEvaluator` computes:
 
-### 3.3 ArmElement (x6)
+- nominal total electrical hover power
+- worst-fault total electrical hover power
+- worst nominal thrust utilization
+- worst nominal power utilization
 
-Six structural arms connecting the body to the motors.
+This phase uses effective disk area derived from arm geometry, not directly from `d_prop`.
 
-**Parameters consumed:** Lx, Lyi, Lyo, Tmax
+### 5. Battery analysis
 
-**Arm length by index:**
+`BatteryEvaluator` computes:
 
-    L_arm(i) = Lyo                      if i in {2, 3}  (outer lateral)
-             = sqrt(Lx^2 + Lyi^2)       otherwise       (diagonal)
+- available battery energy
+- nominal and emergency mission energy demand
+- energy reserve fraction
+- peak C-rate
+- battery mass fraction
 
-**Frame mass (shared across all six arms):**
+These feed the Phase 2 hard constraints.
 
-    S_arm     = 2*Lx + 2*Lyi + 2*Lyo
-    S_arm_0   = 2*2.65 + 2*2.65 + 2*5.50 = 21.60 m
+### 6. Hard constraint evaluation
 
-    m_frame_0 = m_ref - m_pay_0 - 6*m_mot_0
-              = 2240.73 - 1500.0 - 444.42 = 296.31 kg
+The evaluator builds `ConstraintEvaluationContext` and runs all registered constraints from:
 
-    m_frame(Lx, Lyi, Lyo) = m_frame_0 * (S_arm / S_arm_0)
+- `HexacopterArchitecture::registerDefaultConstraints()`
+- each element's `registerConstraints()`
 
-    m_arm(i) = m_frame / 6
+Results are stored in `EvaluationResult.constraint_results`.
 
-**Inertia (arm local frame, about mid-span):**
+### 7. Objective aggregation
 
-    Ixx = 1e-6
-    Iyy = Izz = m_arm * L_arm^2 / 12
+`ObjectiveAggregator` selects only objectives with positive weights from `EvaluationContext.objective_weights`, then computes:
 
-**Geometry:** segment of length L_arm, radius 0.05 m.
+```text
+combined_objective = sum(weight_i * value_i) / sum(weight_i)
+```
 
-**Anchors:**
+Inactive objectives can still be computed and exported without affecting the weighted-sum SOO objective.
 
-| Anchor | Local translation |
-|--------|-------------------|
-| root   | (0, 0, 0)         |
-| tip    | (L_arm, 0, 0)     |
+## Feasibility
 
-**Capabilities:** `IStructuralMember` - contributes L_arm to the total
-structural span; its mass counts toward `frame_mass`.
+A result is feasible only if:
 
-**Constraints registered:**
-- `arm_length_positive`: L_arm(i) >= 0
+1. nominal hover trim is feasible
+2. all-fault hover is feasible when `require_all_fault_acs_feasible` is enabled
+3. every active hard constraint is feasible
 
----
+Infeasible points are still evaluated, exported, and penalized so pagmo can search with a gradient-like signal through violation magnitudes.
 
-### 3.4 MotorElement (x6)
+## Pagmo integration
 
-Motor + ESC assembly. Mass scales allometrically with peak thrust.
+`PagmoProblemAdapter` is the single integration point with pagmo.
 
-**Parameters consumed:** Tmax
+Responsibilities:
 
-**Motor mass (allometric scaling):**
+- clone the architecture
+- unpack normalized variables
+- run Stage 1 evaluation
+- expose bounds
+- return either:
+  - a single weighted-sum fitness for SOO, or
+  - an objective vector for MOO
+- add weighted hard-constraint penalties
 
-    m_mot(Tmax) = m_mot_0 * (Tmax / Tmax_0)^(3/3.5)
+Penalty behavior:
 
-**Geometry (cylinder, rotated 90 deg about x):**
+- each violated active hard constraint contributes `penalty_weight * violation`
+- an additional infeasibility constant is applied when the result is not feasible
 
-    r_mot = 0.08 + 0.04 * (Tmax / Tmax_0)
-    h_mot = 0.12 m
+## SOO and MOO defaults
 
-**Anchors:** `mount`, `axis` (both at origin).
+### SOO
 
-**Capabilities:** `IMotorMassContributor` - world-frame position used to
-compute inertia corrections.
+Implementation: [SooRunner.cpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/src/optimization/SooRunner.cpp:1)
 
-**Constraints registered:**
-- `motor_thrust_positive`: Tmax >= 0
+- algorithm: CMA-ES
+- objective name: `combined`
+- default population: 24
+- default generations: 40
+- default seed: 42
 
----
+Outputs:
 
-### 3.5 RotorElement (x6)
+- baseline result
+- best raw result
+- best feasible result if one exists
+- parameter and comparison exports
 
-Propeller disk. Zero mass; position and yaw sign feed the allocation matrix.
+### MOO
 
-**Parameters consumed:** d_prop
+Implementation: [MooRunner.cpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/src/optimization/MooRunner.cpp:1)
 
-**Geometry:** disk of radius d_prop/2, padding 0.01 m.
+- algorithm: NSGA-II
+- default population: 32
+- default generations: 60
+- default seed: 42
+- config default objective set in code: `mass`, `power`, `fault_thrust`, `fault_alloc`, `hover_nom`
+- CLI currently uses: `mass`, `power`, `fault_alloc`
 
-**Yaw moment signs** (index 0 to 5): [-1, -1, +1, +1, -1, +1]
+Outputs:
 
-**Anchors:** `axis`, `center` (both at origin).
+- full population
+- feasible sub-population
+- Pareto CSV / JSON exports
+- knee-point analysis through `ParetoAnalyzer`
 
-**Capabilities:** `IPropulsionRotor` - provides `rotorIndex()` and
-`yawMomentSign()` to `VehicleScalingModel`.
+## Export and reporting
 
-**Constraints registered:**
-- `rotor_diameter_positive`: d_prop >= 0
+Key export points:
 
----
+- `CsvExporter::writeSooComparisonCsv`
+- `CsvExporter::writeSooParametersCsv`
+- `CsvExporter::writeParetoCsv`
+- `CsvExporter::writeParetoParametersCsv`
+- `CsvExporter::writeSooJson`
+- `CsvExporter::writeMooJson`
 
-### 3.6 BatteryElement
+Key reporting points:
 
-Geometry-only placeholder. Mass = 0 in the physical model.
+- `ComparisonReporter::summarize(...)`
+- `ComparisonReporter::summaryTable(...)`
+- `ComparisonReporter::parametersTable(...)`
+- `ParetoAnalyzer::summarize(...)`
 
-**Parameters consumed:** Tmax, d_prop
+## What changed relative to older docs
 
-**Geometry (box):**
+Older optimization notes in this folder had drift in several areas. Current code now includes:
 
-    L_bat = 0.35 + 0.08 * (Tmax / Tmax_0)
-    w_bat = 0.25 + 0.10 * d_prop
-    h_bat = 0.12 m  (half-height)
+- active structural variables: `arm_outer_radius`, `arm_wall_thickness`
+- active battery variable: `m_bat`
+- structural hard constraint: `arm_yield_failure`
+- battery hard constraints: `battery_energy_reserve`, `battery_crate_limit`
+- ACS hard constraints: `all_faults_hover_feasible`, `fault_directional_margin`
+- additional objective slots: `structural_safety`, `acs_margin`
 
-**Anchors:** `mount`, `center` (both at origin).
-
-**Constraints registered:**
-- `battery_sizing_inputs`: min(Tmax, d_prop) >= 0
-
----
-
-### 3.7 PayloadElement
-
-Rigid payload mass body.
-
-**Parameters consumed:** m_pay
-
-**Mass:** m_pay (implements `IPayloadMassContributor`)
-
-**Geometry:** sphere of radius 0.60 m (fixed).
-
-**Anchors:** `center` at origin.
-
-**Constraints registered:**
-- `payload_mass_nonnegative`: m_pay >= 0
-
----
-
-## 4. Rotor Positions and Assembly
-
-**Motor world-frame positions (z = 0 for all rotors):**
-
-| Index | x    | y    |
-|-------|------|------|
-| 0     | +Lx  | -Lyi |
-| 1     | +Lx  | +Lyi |
-| 2     | 0    | -Lyo |
-| 3     | 0    | +Lyo |
-| 4     | -Lx  | -Lyi |
-| 5     | -Lx  | +Lyi |
-
-**Attachment chain:**
-
-    root --> body (center)
-      body (bottom) --> battery (mount)  + offset (0, 0, +0.02)
-      body (bottom) --> payload (center) + offset (0, 0, -0.05)
-      body (center) --> arm_i (root)     + direction toward motor_i
-        arm_i (tip) --> motor_i (mount)  + rigid
-          motor_i (axis) --> rotor_i (axis) + rigid
-
----
-
-## 5. Physical Model Equations
-
-### 5.1 Mass Properties
-
-    m_total = sum_k( m_k )
-
-    r_COM = sum_k( m_k * r_k ) / m_total
-
-**Inertia** (parallel-axis theorem, world frame):
-
-    I_total = sum_k[ I_k_local + m_k * (||r_k||^2 * Id - r_k * r_k^T) ]
-
-**Body inertia correction** (Ix_0, Iy_0 account for distributed structure):
-
-    Ix_body = Ix_0 - sum_j[ m_mot_j * (yj^2 + zj^2) ]
-    Iy_body = Iy_0 - sum_j[ m_mot_j * (xj^2 + zj^2) ]
-    Iz_body = Ix_body + Iy_body
-
-These are added to Ixx, Iyy, Izz respectively.
-
----
-
-### 5.2 Allocation Matrix
-
-The 4x6 matrix **B** maps rotor thrusts T (R^6) to u = [Fz, Mx, My, Mz]^T:
-
-    u = B * T
-
-    Row 0 (Fz):  -1     -1     -1     -1     -1     -1
-    Row 1 (Mx):  -Lyi   +Lyi   -Lyo   +Lyo   -Lyi   +Lyi
-    Row 2 (My):  +Lx    +Lx     0      0     -Lx    -Lx
-    Row 3 (Mz):  -cT    -cT    +cT    +cT    -cT    +cT
-
-- Row 0: vertical thrust (Fz), negative = upward in NED
-- Row 1: pitch moment (Mx); coefficient = rotor y-position
-- Row 2: roll moment (My); coefficient = rotor x-position
-- Row 3: yaw moment (Mz); coefficient = yaw_sign * cT
-
-For faulted rotor f: column f of B is set to zero.
-
----
-
-### 5.3 Hover Feasibility Solver
-
-Finds T in [0, T_ub] satisfying B * T = [-m_total * g, 0, 0, 0]^T.
-
-**Algorithm:** enumerate all C(6,2) x 4 = 60 basis configurations.
-For each pair (i, j) with boundary values {0, T_ub}:
-
-1. Fix Ti and Tj at their boundary values.
-2. Solve the 4x4 linear system for the remaining four rotors.
-3. Accept if all six thrusts lie in [-1e-6, T_ub + 1e-6].
-4. Keep the feasible candidate minimizing sum(Tk).
-
-With failed rotor f: T_ub_f = 0, T_ub_k = Tmax otherwise.
-
----
-
-### 5.4 Hover Power Proxy
-
-Derived from actuator disk theory (P ~ T^1.5 / sqrt(2 * rho * A));
-the density factor cancels in the normalized ratio:
-
-    A = pi * (d_prop / 2)^2
-
-    P_proxy(T) = sum_k[ max(Tk, 0)^1.5 ] / sqrt(A)
-
----
-
-### 5.5 Structural Proxy
-
-    S_arm = sum_i[ L_arm(i) ]     (total arm span)
-
-    BI = Tmax * S_arm / 6         (bending index)
-
-    BI_norm = BI / (Tmax_0 * Lyo_0) = (Tmax * S_arm / 6) / (7327 * 5.50)
-
----
-
-### 5.6 Packaging (Rotor Disk Clearance)
-
-    c_min = min over all pairs i < j of clearance(rotor_i, rotor_j)
-
-    p_pkg = max(0, -c_min / d_prop)
-
----
-
-## 6. Stage 1 Metrics
-
-All metrics are to be minimized.
-
-### 6.1 Normalized Mass
-
-    f_mass = m_total / m_ref = m_total / 2240.73
-
-### 6.2 Normalized Hover Power
-
-    f_power = P_proxy(T_hover) / P_proxy(T_hover_ref)
-
-### 6.3 Nominal Hover Utilization
-
-    T_avg       = (1/6) * sum_k( T_hover_k )
-    f_hover_nom = (T_avg / Tmax)^2
-
-Penalizes designs where rotors are near saturation during nominal hover.
-
-### 6.4 Fault Tolerance - Thrust Margin
-
-    gamma(f)     = 5 * Tmax / (m_total * g)   for each failed rotor f
-    gamma_worst  = min_f[ gamma(f) ]
-    f_fault_thrust = max(0, gamma_req - gamma_worst)^2
-
-Default gamma_req = 1.5.
-
-### 6.5 Fault Tolerance - Control Effectiveness
-
-Minimum singular value of the scaled matrix:
-
-    M = S * B * diag(T_ub)
-
-    S = diag( 1/(m*g),  1/(m*g*L_max),  1/(m*g*L_max),  1/tau_yaw )
-
-    L_max    = max(Lx, Lyi, Lyo)
-    tau_yaw  = sum_k[ |B_row3_k| * T_ub_k ]
-
-Worst case over all single-rotor failures:
-
-    sigma_worst = min_f[ sigma_min( M_faulted(f) ) ]   (current design)
-    sigma_ref   = min_f[ sigma_min( M_faulted(f) ) ]   (baseline design)
-
-    f_fault_alloc = sigma_ref / sigma_worst
-
-Values > 1 indicate degraded control authority; values < 1 indicate
-improvement relative to baseline.
-
-### 6.6 Structural
-
-    f_structural = BI_norm    (disabled by default; weight = 0.0)
-
-### 6.7 Packaging
-
-    f_packaging = p_pkg       (disabled by default; weight = 0.0)
-
----
-
-## 7. Constraints
-
-All constraints are hard; violation triggers infeasibility.
-
-| Stable ID                | Expression                         | Bound   | Penalty |
-|--------------------------|------------------------------------|---------|---------|
-| parameter_bounds         | max bound violation per param      | <= 0    | 1000    |
-| minimum_geometry_margin  | min(Lx-0.5, Lyi-0.5, Lyo-Lyi-0.1) | >= 0    | 1000    |
-| rotor_clearance          | c_min                              | >= 0    | 1000    |
-| failed_hover_gamma       | gamma_worst                        | >= 1.5  | 2000    |
-| fault_allocation_ratio   | sigma_worst / sigma_ref            | >= 0.05 | 1500    |
-| payload_mass_nonnegative | m_pay                              | >= 0    | 1000    |
-| battery_sizing_inputs    | min(Tmax, d_prop)                  | >= 0    | 500     |
-| body_span_order          | min(Lx, Lyi, Lyo - Lyi)            | >= 0    | 1000    |
-| arm_length_positive      | L_arm(i)                           | >= 0    | 750     |
-| motor_thrust_positive    | Tmax                               | >= 0    | 1000    |
-| rotor_diameter_positive  | d_prop                             | >= 0    | 750     |
-
-A design is **feasible** when: (a) nominal hover is solvable, (b) single-
-rotor failure hover is solvable for all six rotors, and (c) all hard
-constraints hold.
-
----
-
-## 8. Objective Aggregation
-
-### 8.1 Combined (SOO) Objective
-
-    J = sum_i( w_i * f_i ) / sum_i( w_i )
-
-Default weights:
-
-| Objective    | Weight |
-|--------------|--------|
-| mass         | 0.20   |
-| power        | 0.20   |
-| fault_thrust | 0.25   |
-| fault_alloc  | 0.25   |
-| hover_nom    | 0.10   |
-| structural   | 0.00   |
-| packaging    | 0.00   |
-
-Infeasible designs:
-
-    J = 1e6 + sum_i( penalty_i * |constraint_violation_i| )
-
-### 8.2 MOO Objective Vector
-
-Default set (all minimized):
-
-    f_MOO = [f_mass, f_power, f_fault_thrust, f_fault_alloc, f_hover_nom]
-
-Configurable via `MooRunConfig::objective_names`.
-
----
-
-## 9. Optimization Runners
-
-### 9.1 Single-Objective (SOO) - CMA-ES
-
-| Parameter       | Default |
-|-----------------|---------|
-| Population size | 24      |
-| Generations     | 40      |
-| Seed            | 42      |
-| f-tolerance     | 1e-6    |
-
-Minimizes J_combined. Tracks best raw and best feasible results separately.
-
-### 9.2 Multi-Objective (MOO) - NSGA-II
-
-| Parameter       | Default        |
-|-----------------|----------------|
-| Population size | 32 (mult of 4) |
-| Generations     | 60             |
-| Seed            | 42             |
-| Crossover prob. | 0.95           |
-| Crossover eta   | 10.0           |
-| Mutation eta    | 50.0           |
-| Mutation rate   | 1 / n_vars     |
-
-Output: full population, feasible sub-population, per-point objective vectors.
-Pareto front identified by `ParetoAnalyzer`.
-
-### 9.3 Design Vector Mapping
-
-Only active parameters are included. `DesignVectorMapper` converts between
-raw parameter values and normalized Pagmo bounds. Each active parameter
-contributes one dimension.
-
----
-
-## 10. Baseline Values Summary
-
-| Quantity          | Value        |
-|-------------------|--------------|
-| Total mass        | 2240.73 kg   |
-| Frame mass        | 296.31 kg    |
-| Motor mass (each) | 74.07 kg     |
-| Payload           | 1500 kg      |
-| Tmax (per rotor)  | 7327 N       |
-| Arm span S_arm    | 21.60 m      |
-| Ix body           | 12000 kg*m^2 |
-| Iy body           | 9400 kg*m^2  |
-| d_prop            | 0.40 m       |
-| cT                | 0.03         |
+Use the detailed constraint/variable file as the canonical current list rather than older copied tables.
