@@ -434,6 +434,45 @@ void HexacopterArchitecture::registerDefaultConstraints() {
         }
     });
 
+    // Phase 4: arm tip deflection — worst δ_tip over all members × load cases must not exceed limit.
+    // Normalized violation = (δ - δ_allow) / δ_allow so the gradient is dimensionally consistent.
+    constraints_.add({
+        "arm_tip_deflection",
+        id_,
+        ConstraintSense::less_equal,
+        0.0,
+        true,
+        true,
+        1500.0,
+        [](const ConstraintEvaluationContext& context) {
+            const double delta = context.stage1_metrics.struct_net_max_tip_deflection_m;
+            const double limit = std::max(context.evaluation_context.arm_tip_deflection_limit_m, 1e-9);
+            const double ratio = delta / limit - 1.0;
+            Constraint constraint{"arm_tip_deflection", context.architecture.id(),
+                ConstraintSense::less_equal, 0.0};
+            return constraint.evaluate(ratio);
+        }
+    });
+
+    // Phase 4: arm tip rotation — worst θ_tip over all members × load cases must not exceed limit.
+    constraints_.add({
+        "arm_tip_rotation",
+        id_,
+        ConstraintSense::less_equal,
+        0.0,
+        true,
+        true,
+        1500.0,
+        [](const ConstraintEvaluationContext& context) {
+            const double theta = context.stage1_metrics.struct_net_max_tip_rotation_rad;
+            const double limit = std::max(context.evaluation_context.arm_tip_rotation_limit_rad, 1e-9);
+            const double ratio = theta / limit - 1.0;
+            Constraint constraint{"arm_tip_rotation", context.architecture.id(),
+                ConstraintSense::less_equal, 0.0};
+            return constraint.evaluate(ratio);
+        }
+    });
+
     // ACS fault-hover feasibility: all single-fault hover trims must be achievable within T_max.
     // hover_margin = T_max / T_hover_worst - 1 >= 0 when all faults feasible.
     // Continuous violation (not binary) gives CMA-ES a gradient signal within the infeasible region:

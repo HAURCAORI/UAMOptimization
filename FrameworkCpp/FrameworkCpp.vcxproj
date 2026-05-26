@@ -65,6 +65,7 @@
     <ClCompile Include="src\core\ParameterRegistry.cpp" />
     <ClCompile Include="src\evaluation\ArchitectureEvaluator.cpp" />
     <ClCompile Include="src\evaluation\EvaluationContext.cpp" />
+    <ClCompile Include="src\evaluation\MetricRole.cpp" />
     <ClCompile Include="src\evaluation\ObjectiveAggregator.cpp" />
     <ClCompile Include="src\evaluation\Stage1Evaluator.cpp" />
     <ClCompile Include="src\optimization\DesignVectorMapper.cpp" />
@@ -79,6 +80,7 @@
     <ClCompile Include="src\physics\PowertrainEvaluator.cpp" />
     <ClCompile Include="src\physics\PrimitiveDistance.cpp" />
     <ClCompile Include="src\physics\StructuralAnalyzer.cpp" />
+    <ClCompile Include="src\physics\StructuralNetworkAnalyzer.cpp" />
     <ClCompile Include="src\physics\VehicleScalingModel.cpp" />
     <ClCompile Include="visualization\src\visualization\ArchitectureSceneBuilder.cpp" />
     <ClCompile Include="visualization\src\visualization\ArchitectureViewerApp.cpp" />
@@ -107,6 +109,7 @@
     <ClInclude Include="include\evaluation\ArchitectureEvaluator.hpp" />
     <ClInclude Include="include\evaluation\EvaluationContext.hpp" />
     <ClInclude Include="include\evaluation\EvaluationResult.hpp" />
+    <ClInclude Include="include\evaluation\MetricRole.hpp" />
     <ClInclude Include="include\evaluation\ObjectiveAggregator.hpp" />
     <ClInclude Include="include\evaluation\Stage1Evaluator.hpp" />
     <ClInclude Include="include\optimization\DesignVectorMapper.hpp" />
@@ -122,6 +125,7 @@
     <ClInclude Include="include\physics\PowertrainEvaluator.hpp" />
     <ClInclude Include="include\physics\PrimitiveDistance.hpp" />
     <ClInclude Include="include\physics\StructuralAnalyzer.hpp" />
+    <ClInclude Include="include\physics\StructuralNetworkAnalyzer.hpp" />
     <ClInclude Include="include\physics\VehicleScalingModel.hpp" />
     <ClInclude Include="visualization\include\visualization\ArchitectureSceneBuilder.hpp" />
     <ClInclude Include="visualization\include\visualization\ArchitectureViewerApp.hpp" />

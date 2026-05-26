@@ -108,6 +108,7 @@ public:
     [[nodiscard]] double innerRadius() const override;
     [[nodiscard]] double crossSectionArea() const override;
     [[nodiscard]] double secondMomentOfArea() const override;
+    [[nodiscard]] double polarMomentOfArea() const override;
     void clearLoads() override;
     void addLoad(const AppliedLoad& load) override;
     [[nodiscard]] const std::vector<AppliedLoad>& loads() const override;

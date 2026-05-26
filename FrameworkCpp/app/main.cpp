@@ -424,6 +424,8 @@ int runSooWithVisualization(
     hexaarch::visualization::ArchitectureViewerApp app;
     app.setArchitecture(init_arch);
 
+    std::optional<hexaarch::optimization::SooRunResult> run_result;
+
     std::thread opt_thread([&]() {
         hexaarch::optimization::SooRunConfig config;
         config.population_size = options.soo_population_size;
@@ -446,10 +448,21 @@ int runSooWithVisualization(
         }
         std::cout << "[" << currentTimestamp() << "] SOO complete: "
                   << hexaarch::analysis::ComparisonReporter::summarize(result) << '\n';
+        run_result = result;
     });
 
     const int viewer_result = app.run();
     opt_thread.join();
+
+    if (options.plot_acs && run_result.has_value()) {
+        const auto& res = *run_result;
+        if (res.best_feasible.has_value()) {
+            runAcsPlot(res.best_feasible->result, options, "SOO-Best");
+        } else {
+            runAcsPlot(res.baseline, options, "SOO-Baseline");
+        }
+    }
+
     return viewer_result;
 }
 

@@ -2316,6 +2316,14 @@ void ArchitectureViewerApp::postArchitecture(core::HexacopterArchitecture archit
     }
 }
 
+void ArchitectureViewerApp::requestClose() {
+#ifdef HEXAARCH_VISUALIZATION_HAS_VULKAN
+    if (impl_ && impl_->window) {
+        glfwSetWindowShouldClose(impl_->window, GLFW_TRUE);
+    }
+#endif
+}
+
 int ArchitectureViewerApp::run() {
     if (architecture_ == nullptr) {
         throw std::logic_error("ArchitectureViewerApp requires a bound architecture before run().");

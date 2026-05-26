@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "core/Constraint.hpp"
+#include "evaluation/MetricRole.hpp"
 #include "physics/AttainableControlSetAnalyzer.hpp"
 #include "physics/PhysicsTypes.hpp"
 
@@ -13,6 +14,7 @@ struct ObjectiveValue {
     std::string name;
     double value = 0.0;
     double weight = 0.0;
+    MetricRole role = MetricRole::soft_objective;
 };
 
 struct ConstraintResult {
@@ -22,6 +24,11 @@ struct ConstraintResult {
     bool hard = true;
     bool active = true;
     core::ConstraintEvaluation evaluation;
+
+    [[nodiscard]] MetricRole metricRole() const {
+        if (!active) return MetricRole::analysis_only;
+        return hard ? MetricRole::hard_constraint : MetricRole::soft_objective;
+    }
 };
 
 struct Stage1Metrics {
@@ -76,6 +83,12 @@ struct Stage1Metrics {
     double bat_energy_reserve_fraction = 0.0;  // (E_avail - E_req) / E_avail; ≥0 = feasible
     double bat_c_rate = 0.0;                   // peak pack current / rated capacity [1/h]
     double bat_mass_fraction = 0.0;            // m_bat / m_total ∈ [0,1]
+
+    // Phase 3: Structural network (multi-load-case von Mises analysis — A/C in spec)
+    double struct_net_min_safety_factor = 0.0;    // worst SF over all members × load cases
+    double struct_net_max_tip_deflection_m = 0.0; // worst arm tip deflection [m]
+    double struct_net_max_tip_rotation_rad = 0.0; // worst arm tip rotation [rad]
+    double struct_net_max_sigma_vm_pa = 0.0;      // worst von Mises stress [Pa]
 };
 
 struct EvaluationResult {

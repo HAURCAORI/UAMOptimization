@@ -40,6 +40,7 @@ FrameworkCpp/
 │   │   ├── ArchitectureEvaluator.hpp  Top-level evaluation entry point
 │   │   ├── EvaluationContext.hpp   Weights, material, constraint thresholds, seeds
 │   │   ├── EvaluationResult.hpp    Stage1Metrics, EvaluationResult, ConstraintResult, ObjectiveValue
+│   │   ├── MetricRole.hpp          MetricRole enum + MetricDescriptor + stage1MetricDescriptors() (Phase 5)
 │   │   ├── ObjectiveAggregator.hpp Weighted sum aggregator
 │   │   └── Stage1Evaluator.hpp     Stage 1 metric computation
 │   ├── optimization/
@@ -55,11 +56,12 @@ FrameworkCpp/
 │       ├── BatteryEvaluator.hpp    Phase 2: battery energy budget (Wh, reserve, C-rate)
 │       ├── Material.hpp            Material struct + Materials::Al7075/CFRP/Steel304
 │       ├── PhysicsTypes.hpp        PhysicalModel, PropulsionProxy, StructuralProxy,
-│       │                           ArmStructuralResult, PackagingResult,
-│       │                           PowertrainResult, BatteryResult (Phase 2)
+│       │                           ArmStructuralResult, MemberLoadResult (Phase 3),
+│       │                           PackagingResult, PowertrainResult, BatteryResult (Phase 2)
 │       ├── PowertrainEvaluator.hpp Phase 2: per-motor electrical power (actuator-disk model)
 │       ├── PrimitiveDistance.hpp   Geometry collision/clearance helpers
-│       ├── StructuralAnalyzer.hpp  Cantilever beam safety factor analysis
+│       ├── StructuralAnalyzer.hpp  Cantilever beam safety factor analysis (legacy; min_sf path)
+│       ├── StructuralNetworkAnalyzer.hpp  Phase 3: multi-member network (von Mises, deflection)
 │       └── VehicleScalingModel.hpp Mass/geometry/propulsion scaling
 ├── src/                            Mirrors include/ layout; each .cpp implements its .hpp
 ├── visualization/                  ImGui/Vulkan 3D viewer (ArchitectureViewerApp)
@@ -105,7 +107,7 @@ FrameworkCpp/
 |---|---|---|
 | `IPropulsionRotor` | `thrustAxis()`, `thrustCoeff()`, `maxThrust()` | MotorElement |
 | `IStructuralMember` | `structuralSpanContribution()` | ArmElement |
-| `IStructuralBeam` | `outerRadius()`, `innerRadius()`, `crossSectionArea()`, `secondMomentOfArea()` | ArmElement |
+| `IStructuralBeam` | `outerRadius()`, `innerRadius()`, `crossSectionArea()`, `secondMomentOfArea()`, `polarMomentOfArea()` | ArmElement |
 | `ILoadReceiver` | `clearLoads()`, `addLoad()`, `loads()` | ArmElement |
 | `IMotorMassContributor` | `motorMass()` | MotorElement |
 | `IPayloadMassContributor` | `payloadMass()` | PayloadElement |
@@ -113,15 +115,20 @@ FrameworkCpp/
 ### `Stage1Evaluator` (evaluation)
 Evaluation pipeline in order:
 1. `VehicleScalingModel::evaluate()` → fills `PhysicalModel` (mass now includes m_bat, propulsion, packaging)
-2. `StructuralAnalyzer::analyze()` → fills `arm_structural`, `structural.min_safety_factor`
-3. `AttainableControlSetAnalyzer::analyze()` → fills `AcsResult` (trim, directional margins,
+2. `AttainableControlSetAnalyzer::analyze()` → fills `AcsResult` (trim, directional margins,
    volume metrics, per-axis reserves, fault degradation ratio)
-4. **`PowertrainEvaluator::evaluate()`** (Phase 2) → fills `PowertrainResult` (motor power [W], utilizations)
-5. **`BatteryEvaluator::evaluate()`** (Phase 2) → fills `BatteryResult` (energy [Wh], reserve fraction, C-rate)
+3. **`PowertrainEvaluator::evaluate()`** (Phase 2) → fills `PowertrainResult` (motor power [W], utilizations)
+4. **`BatteryEvaluator::evaluate()`** (Phase 2) → fills `BatteryResult` (energy [Wh], reserve fraction, C-rate)
+5. **`StructuralNetworkAnalyzer::analyze()`** (Phase 3) → fills `network_structural` (per-member per-load-case),
+   `structural.min_safety_factor`, `structural.network_*` fields. Uses ACS fault trims as load cases.
 6. Computes `Stage1Metrics` from `PhysicalModel` + `AcsResult` + `PowertrainResult` + `BatteryResult`
 7. Calls `ConstraintRegistry` evaluators → fills `constraint_results`
 8. Appends `acs::all_faults_hover_feasible` as a named hard constraint to `constraint_results`
 9. Calls `ObjectiveAggregator::aggregate()` → fills `objectives`, `combined_objective`
+
+> **StructuralAnalyzer** (the old single-load-case analyzer) is still registered in vcxproj but is no
+> longer called by Stage1Evaluator. StructuralNetworkAnalyzer supersedes it and writes the same
+> `structural.min_safety_factor` field that the `arm_yield_failure` constraint reads.
 
 ### `OptimizationProblem` (optimization)
 Returned by `PagmoProblemAdapter::problem()`. Contains **physical** (not normalized) bounds:
@@ -174,14 +181,15 @@ HexacopterArchitecture (parameters, elements, attachments)
     │
     └── ArchitectureEvaluator::evaluate(arch, context)
             └──► Stage1Evaluator::evaluate()
-                    ├── VehicleScalingModel          → PhysicalModel (mass incl. m_bat, thrust, geometry)
-                    ├── StructuralAnalyzer            → arm_structural, min_safety_factor
-                    ├── AttainableControlSetAnalyzer  → AcsResult (trim, margins, reserves)
-                    ├── PowertrainEvaluator [Phase 2] → PowertrainResult (motor power [W])
-                    ├── BatteryEvaluator    [Phase 2] → BatteryResult (energy [Wh], reserve, C-rate)
-                    ├── ConstraintRegistry            → constraint_results (arch constraints)
-                    ├── [Stage1Evaluator]             → appends acs::all_faults_hover_feasible
-                    └── ObjectiveAggregator           → combined_objective
+                    ├── VehicleScalingModel                → PhysicalModel (mass incl. m_bat, thrust, geometry)
+                    ├── AttainableControlSetAnalyzer       → AcsResult (trim, margins, reserves)
+                    ├── PowertrainEvaluator [Phase 2]      → PowertrainResult (motor power [W])
+                    ├── BatteryEvaluator    [Phase 2]      → BatteryResult (energy [Wh], reserve, C-rate)
+                    ├── StructuralNetworkAnalyzer [Phase 3] → network_structural, min_safety_factor,
+                    │                                          network_min_sf, max_tip_deflection, max_sigma_vm
+                    ├── ConstraintRegistry                 → constraint_results (arch constraints)
+                    ├── [Stage1Evaluator]                  → appends acs::all_faults_hover_feasible
+                    └── ObjectiveAggregator                → combined_objective
                             └──► EvaluationResult
 
 SooRunner / MooRunner
@@ -284,6 +292,18 @@ Active parameter count for optimizer: **7**
 | `bat_c_rate` | 1/h | P_peak / E_avail (voltage-invariant C-rate) |
 | `bat_mass_fraction` | — | m_bat / m_total ∈ [0,1] |
 
+### Structural network metrics (Phase 3)
+| Field | Unit | Description |
+|---|---|---|
+| `struct_net_min_safety_factor` | — | Worst safety factor over all arms × load cases (= `structural.min_safety_factor`) |
+| `struct_net_max_tip_deflection_m` | m | Worst Euler-Bernoulli tip deflection over all arms × load cases |
+| `struct_net_max_tip_rotation_rad` | rad | Worst Euler-Bernoulli tip rotation over all arms × load cases |
+| `struct_net_max_sigma_vm_pa` | Pa | Worst von Mises stress over all arms × load cases |
+
+**Load cases** (8 total): `max_thrust` (all rotors at T_max), `nominal_hover` (ACS LP trim), `fault_0`..`fault_5` (6 single-motor fault trims from ACS).
+
+**Stress model** (horizontal cantilever arms): N=0 (vertical loads ⊥ to arm axis); T_torsion=0 (yaw torque about z-axis → zero projection onto horizontal arm). Yaw reaction manifests as horizontal bending M_h = cT·T. Von Mises: σ_vm = √((σ_ax + σ_b)² + 3τ²) ≈ σ_b.
+
 ---
 
 ## Current Hard Constraints
@@ -297,7 +317,9 @@ Active parameter count for optimizer: **7**
 | `rotor_clearance` | ≥ | 0.0 | 1000 | minimum rotor-to-rotor disk clearance |
 | `failed_hover_gamma` | ≥ | 1.5 | 2000 | `gamma_worst` = (5·T_max)/mg (worst single-fault thrust ratio) |
 | `fault_allocation_ratio` | ≥ | 0.05 | 1500 | `sigma_worst / sigma_reference` (control allocation under fault) |
-| `arm_yield_failure` | ≥ | 1.5 (configurable) | 2000 | `min_safety_factor` from StructuralAnalyzer |
+| `arm_yield_failure` | ≥ | 1.5 (configurable) | 2000 | `structural.min_safety_factor` (now set by StructuralNetworkAnalyzer, Phase 3) |
+| `arm_tip_deflection` | ≤ | 0.0 | 1500 | `(δ_max / δ_allow) − 1` where `δ_allow = arm_tip_deflection_limit_m` (Phase 4) |
+| `arm_tip_rotation` | ≤ | 0.0 | 1500 | `(θ_max / θ_allow) − 1` where `θ_allow = arm_tip_rotation_limit_rad` (Phase 4) |
 | `battery_energy_reserve` | ≥ | 0.0 | 2000 | `bat_energy_reserve_fraction` (Phase 2) |
 | `battery_crate_limit` | ≤ | 0.0 | 1500 | `bat_c_rate / C_allow − 1` (Phase 2) |
 
@@ -356,41 +378,61 @@ acs_vertices.csv      full 4D vertex cloud (nominal + worst-fault motor)
 3. **Parameter stable IDs**: `owner_id + "::" + name` (e.g., `"hexa::arm_outer_radius"`).
    Short name stripping: `stable_id.rfind("::")` then `substr(pos + 2)`.
 
-4. **StructuralAnalyzer call order**: Must run AFTER `VehicleScalingModel` (needs `thrust_max`, `gravity`)
-   and BEFORE constraint evaluation (constraint reads `structural.min_safety_factor`).
+4. **Phase 4 stiffness constraint limits**: `arm_tip_deflection_limit_m=0.10` and `arm_tip_rotation_limit_rad=0.10`
+   (~5.7°) in `EvaluationContext`. For the default 5.5 m outer arm under max thrust (12 kN), Euler-Bernoulli
+   gives δ ≈ 1.27 m, so violation is large (~1200%). The optimizer must push wall thickness or reduce arm span.
 
-5. **`arm_outer_radius` effect on 3D view**: `ArmElement::updateFromParameters()` sets segment
+5. **StructuralNetworkAnalyzer call order (Phase 3)**: Must run AFTER `AttainableControlSetAnalyzer`
+   (needs fault trim thrusts as load cases) and BEFORE constraint evaluation (constraint reads
+   `structural.min_safety_factor`). The old `StructuralAnalyzer` is no longer called; it is superseded.
+
+6. **`arm_outer_radius` effect on 3D view**: `ArmElement::updateFromParameters()` sets segment
    primitive `padding = r_o_->value`. The viewer's `modelMatrixForInstance()` (segment case) sets
    `diameter = 2.0 * padding` and rotates the unit cylinder by -90° around Z so the cylinder axis
    (normally Y) aligns with the arm axis (X). `PrimitiveMeshFactory::makeUnitSegmentProxy()` returns
    a cylinder mesh (not box). Arms appear as round tubes in the viewer.
 
-6. **`objective_weights` defaults**: `structural`, `packaging`, `structural_safety` have weight 0.0 —
+7. **`objective_weights` defaults**: `structural`, `packaging`, `structural_safety` have weight 0.0 —
    computed and stored but not included in `combined_objective` unless weight is raised.
-   `acs_margin` has weight 0.10 and is always active as a soft penalty term.
+   `acs_margin_penalty` has weight 0.10 (name must be `"acs_margin_penalty"` in `objective_weights`
+   to match the key used by `ObjectiveAggregator`).
 
-7. **`arm_structural` empty guard**: If an architecture has no `IStructuralBeam` elements,
+8. **`arm_structural` empty guard**: If an architecture has no `IStructuralBeam` elements,
    `arm_structural` is empty and `min_safety_factor = 0`, causing `arm_yield_failure` to fire
    (conservative fail-safe).
 
-8. **Baseline T_max vs bounds**: `kBaselineTmax ≈ 7327 N` is below the optimizer lower bound of
-   8000 N. The pagmo optimizer starts from a population seeded within [8000, 16000], not from the
-   baseline. The baseline evaluation uses the raw constant; the SOO/MOO optimization does not.
+9. **T_max parameter default vs. internal scaling references**: `kBaselineTmax = 12000.0 N` in
+   `HexacopterArchitecture.cpp` is the parameter default value (optimizer start point). It is
+   separate from the internal reference `baseline_tmax = 7327.0` in `VehicleScalingModel.cpp`
+   and `kBaselineMotorTmax = 7327.0` in `Elements.cpp`, which are calibration constants for the
+   bending index normalization and motor mass allometric scaling respectively. T_max optimizer
+   bounds are [8000, 20000] N.
 
-9. **Constraint ID mismatch risk**: The hard constraints in `ConstraintRegistry` use IDs like
-   `failed_hover_gamma` and `fault_allocation_ratio`. Do not confuse with the Stage1Metrics field
-   names `fault_thrust` and `fault_alloc`, which are soft objective proxies computed differently.
+10. **Constraint ID mismatch risk**: The hard constraints in `ConstraintRegistry` use IDs like
+    `failed_hover_gamma` and `fault_allocation_ratio`. Do not confuse with the Stage1Metrics field
+    names `fault_thrust` and `fault_alloc`, which are soft objective proxies computed differently.
 
-10. **Phase 2 power model uses arm geometry, not d_prop**: `PowertrainEvaluator` sets
+11. **Phase 2 power model uses arm geometry, not d_prop**: `PowertrainEvaluator` sets
     `r_eff = max_arm_length / 2` as the effective rotor disk radius. `d_prop = 0.40 m` is frozen
     for cT (yaw torque) only. Using d_prop for power would give >100× too much power at this
-    vehicle mass. See `docs/Phase2_Powertrain_Battery.md`.
+    vehicle mass. See `docs/Phase2_Powertrain_Battery.md`. (Note: the hover power proxy in
+    Stage1Evaluator still uses d_prop for the `power` objective normalization, which is correct —
+    this is a different quantity from the Phase 2 actuator-disk model.)
 
-11. **Battery mass feedback loop**: `BatteryElement.mass_` is now set from `m_bat->value`, so
+12. **Battery mass feedback loop**: `BatteryElement.mass_` is now set from `m_bat->value`, so
     adding battery mass increases hover thrust, which increases hover power, which increases energy
     requirement. The battery constraint (`battery_energy_reserve`) stabilises at ≈290 kg minimum
     at baseline geometry, creating a non-trivial optimization gradient for `m_bat`.
 
-12. **Active parameter count changed (Phase 2)**: Adding `m_bat` (active=true) increases active
-    parameters from 6 to 7. Any code that assumes a fixed active-parameter count must be updated.
-    Check with `arch.parameters().activeParameters().size()` at runtime.
+13. **MetricRole labeling (Phase 5)**: `MetricRole` enum (`hard_constraint`, `soft_objective`,
+    `analysis_only`) is defined in `include/evaluation/MetricRole.hpp`. The `stage1MetricDescriptors()`
+    static table maps all ~35 Stage1Metrics fields to their role. `ObjectiveValue.role` is always
+    `soft_objective` (set by `ObjectiveAggregator`). `ConstraintResult.metricRole()` returns
+    `hard_constraint` when `hard=true` and `active=true`, `analysis_only` when `active=false`.
+    JSON output: `objectives[]` and `constraints[]` include `"role"` fields; `metric_descriptors[]`
+    array emitted by `evaluationToJson()`. Phase 4 context params (`arm_tip_deflection_limit_m`,
+    `arm_tip_rotation_limit_rad`) appear in the `evaluation_context` JSON block.
+
+14. **Active parameter count (Phase 2)**: `m_bat` (active=true) brings the active parameter count
+    to 7: Lx, Lyi, Lyo, T_max, arm_outer_radius, arm_wall_thickness, m_bat.
+    Check at runtime with `arch.parameters().activeParameters().size()`.

@@ -26,6 +26,7 @@ public:
 
     void setArchitecture(const core::HexacopterArchitecture& architecture);
     void postArchitecture(core::HexacopterArchitecture architecture, std::string title = {});
+    void requestClose();
     [[nodiscard]] int run();
     [[nodiscard]] const ViewerCamera& camera() const;
 

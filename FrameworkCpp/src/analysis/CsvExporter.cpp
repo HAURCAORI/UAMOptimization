@@ -7,6 +7,7 @@
 #include "analysis/ComparisonReporter.hpp"
 #include "analysis/ParetoAnalyzer.hpp"
 #include "core/Timestamp.hpp"
+#include "evaluation/MetricRole.hpp"
 #include "nlohmann/json.hpp"
 
 namespace hexaarch::analysis {
@@ -68,7 +69,12 @@ nlohmann::json parameterMapToJson(
 nlohmann::json objectiveListToJson(const std::vector<evaluation::ObjectiveValue>& objectives) {
     nlohmann::json arr = nlohmann::json::array();
     for (const auto& obj : objectives) {
-        arr.push_back({{"name", obj.name}, {"value", obj.value}, {"weight", obj.weight}});
+        arr.push_back({
+            {"name", obj.name},
+            {"value", obj.value},
+            {"weight", obj.weight},
+            {"role", evaluation::metricRoleName(obj.role)}
+        });
     }
     return arr;
 }
@@ -78,6 +84,7 @@ nlohmann::json constraintListToJson(const std::vector<evaluation::ConstraintResu
     for (const auto& cr : constraints) {
         arr.push_back({
             {"id", cr.stable_id},
+            {"role", evaluation::metricRoleName(cr.metricRole())},
             {"hard", cr.hard},
             {"active", cr.active},
             {"feasible", cr.evaluation.feasible},
@@ -116,7 +123,11 @@ nlohmann::json stage1ToJson(const evaluation::Stage1Metrics& m) {
         {"bat_required_energy_wh", m.bat_required_energy_wh},
         {"bat_energy_reserve_fraction", m.bat_energy_reserve_fraction},
         {"bat_c_rate", m.bat_c_rate},
-        {"bat_mass_fraction", m.bat_mass_fraction}
+        {"bat_mass_fraction", m.bat_mass_fraction},
+        {"struct_net_min_safety_factor", m.struct_net_min_safety_factor},
+        {"struct_net_max_tip_deflection_m", m.struct_net_max_tip_deflection_m},
+        {"struct_net_max_tip_rotation_rad", m.struct_net_max_tip_rotation_rad},
+        {"struct_net_max_sigma_vm_pa", m.struct_net_max_sigma_vm_pa}
     };
 }
 
@@ -158,6 +169,18 @@ nlohmann::json physicalModelToJson(const physics::PhysicalModel& model) {
     };
 }
 
+nlohmann::json metricDescriptorsToJson() {
+    nlohmann::json arr = nlohmann::json::array();
+    for (const auto& d : evaluation::stage1MetricDescriptors()) {
+        arr.push_back({
+            {"name", d.name},
+            {"role", evaluation::metricRoleName(d.role)},
+            {"unit", d.unit}
+        });
+    }
+    return arr;
+}
+
 nlohmann::json evaluationToJson(const evaluation::EvaluationResult& result) {
     return {
         {"feasible", result.feasible},
@@ -166,6 +189,7 @@ nlohmann::json evaluationToJson(const evaluation::EvaluationResult& result) {
         {"stage1", stage1ToJson(result.stage1)},
         {"objectives", objectiveListToJson(result.objectives)},
         {"constraints", constraintListToJson(result.constraint_results)},
+        {"metric_descriptors", metricDescriptorsToJson()},
         {"physical_model", physicalModelToJson(result.physical_model)}
     };
 }
@@ -199,6 +223,8 @@ nlohmann::json evaluationContextToJson(const evaluation::EvaluationContext& cont
         {"mission_time_nominal_min", context.mission_time_nominal_min},
         {"mission_time_emergency_min", context.mission_time_emergency_min},
         {"power_auxiliary_w", context.power_auxiliary_w},
+        {"arm_tip_deflection_limit_m", context.arm_tip_deflection_limit_m},
+        {"arm_tip_rotation_limit_rad", context.arm_tip_rotation_limit_rad},
         {"objective_weights", weights}
     };
 }

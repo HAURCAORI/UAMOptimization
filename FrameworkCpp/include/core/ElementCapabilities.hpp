@@ -24,6 +24,8 @@ public:
     [[nodiscard]] virtual double innerRadius() const = 0;
     [[nodiscard]] virtual double crossSectionArea() const = 0;
     [[nodiscard]] virtual double secondMomentOfArea() const = 0;
+    // Polar moment of area J [m⁴]. For circular hollow: J = 2I exactly.
+    [[nodiscard]] virtual double polarMomentOfArea() const = 0;
 };
 
 class IMotorMassContributor {

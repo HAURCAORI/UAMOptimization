@@ -11,7 +11,7 @@
 #include "physics/AttainableControlSetAnalyzer.hpp"
 #include "physics/BatteryEvaluator.hpp"
 #include "physics/PowertrainEvaluator.hpp"
-#include "physics/StructuralAnalyzer.hpp"
+#include "physics/StructuralNetworkAnalyzer.hpp"
 #include "physics/VehicleScalingModel.hpp"
 
 namespace hexaarch::evaluation {
@@ -66,8 +66,6 @@ EvaluationResult Stage1Evaluator::evaluate(
 
     physics::VehicleScalingModel model_builder;
     result.physical_model = model_builder.evaluate(architecture);
-
-    physics::StructuralAnalyzer{}.analyze(result.physical_model, architecture, context);
 
     static const physics::PhysicalModel s_reference_model = []() {
         return physics::VehicleScalingModel{}.evaluate(core::HexacopterArchitecture{});
@@ -173,6 +171,26 @@ EvaluationResult Stage1Evaluator::evaluate(
         result.stage1.bat_energy_reserve_fraction = result.battery.energy_reserve_fraction;
         result.stage1.bat_c_rate                  = result.battery.c_rate;
         result.stage1.bat_mass_fraction           = result.battery.mass_fraction;
+    }
+
+    // --- Phase 3: Structural network (multi-load-case von Mises analysis) ---
+    // Runs after ACS so fault trim thrusts are available. Replaces the old StructuralAnalyzer
+    // and populates model.arm_structural (backwards compat) and model.structural fields.
+    {
+        std::vector<std::array<double, physics::kNumRotors>> fault_thrusts;
+        fault_thrusts.reserve(physics::kNumRotors);
+        for (int fi = 0; fi < physics::kNumRotors; ++fi) {
+            fault_thrusts.push_back(result.acs.faulted.at(static_cast<std::size_t>(fi)).trim_thrust);
+        }
+        physics::StructuralNetworkAnalyzer{}.analyze(
+            result.physical_model, architecture, context,
+            result.acs.nominal.trim_thrust,
+            fault_thrusts);
+
+        result.stage1.struct_net_min_safety_factor    = result.physical_model.structural.network_min_safety_factor;
+        result.stage1.struct_net_max_tip_deflection_m = result.physical_model.structural.network_max_tip_deflection;
+        result.stage1.struct_net_max_tip_rotation_rad = result.physical_model.structural.network_max_tip_rotation;
+        result.stage1.struct_net_max_sigma_vm_pa      = result.physical_model.structural.network_max_sigma_vm;
     }
 
     // --- Mass objective ---

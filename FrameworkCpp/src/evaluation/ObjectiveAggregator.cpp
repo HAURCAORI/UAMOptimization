@@ -8,7 +8,7 @@ double ObjectiveAggregator::aggregate(EvaluationResult& result, const Evaluation
     const auto append = [&](const std::string& name, const double value) {
         for (const auto& weight : context.objective_weights) {
             if (weight.weight > 0.0 && weight.name == name) {
-                result.objectives.push_back({name, value, weight.weight});
+                result.objectives.push_back({name, value, weight.weight, MetricRole::soft_objective});
                 return;
             }
         }
@@ -22,7 +22,7 @@ double ObjectiveAggregator::aggregate(EvaluationResult& result, const Evaluation
     append("structural", result.stage1.structural);
     append("packaging", result.stage1.packaging);
     append("structural_safety", result.stage1.structural_safety);
-    append("acs_margin", result.stage1.acs_margin_penalty);
+    append("acs_margin_penalty", result.stage1.acs_margin_penalty);
 
     double numerator = 0.0;
     double denominator = 0.0;

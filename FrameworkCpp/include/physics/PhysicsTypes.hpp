@@ -37,6 +37,25 @@ struct ArmStructuralResult {
     bool structural_failure = false;
 };
 
+// Phase 3: per-member per-load-case full structural result.
+// Produced by StructuralNetworkAnalyzer for every IStructuralBeam × every load case.
+struct MemberLoadResult {
+    std::string member_id;
+    std::string load_case_id;
+    double L = 0.0;           // member length [m]
+    double N = 0.0;           // axial force [N]
+    double V = 0.0;           // root shear force [N]
+    double M_b = 0.0;         // bending moment magnitude at root [Nm]
+    double T_torsion = 0.0;   // torsional moment at root [Nm]
+    double sigma_ax = 0.0;    // axial normal stress [Pa]
+    double sigma_b = 0.0;     // bending normal stress at outer fiber [Pa]
+    double tau_t = 0.0;       // torsional shear stress at outer fiber [Pa]
+    double sigma_vm = 0.0;    // von Mises equivalent stress [Pa]
+    double safety_factor = 0.0;
+    double delta_tip = 0.0;   // Euler-Bernoulli tip deflection [m]
+    double theta_tip = 0.0;   // Euler-Bernoulli tip rotation [rad]
+};
+
 struct StructuralProxy {
     double arm_span = 0.0;
     double max_arm_length = 0.0;
@@ -44,7 +63,13 @@ struct StructuralProxy {
     double motor_mass = 0.0;
     double bending_index = 0.0;
     double normalized_bending_index = 0.0;
-    double min_safety_factor = 0.0;
+    double min_safety_factor = 0.0;         // worst SF (used by arm_yield_failure constraint)
+
+    // Phase 3: multi-load-case network structural results
+    double network_min_safety_factor = 0.0;  // worst SF over all members × load cases
+    double network_max_tip_deflection = 0.0; // worst tip deflection [m]
+    double network_max_tip_rotation = 0.0;   // worst tip rotation [rad]
+    double network_max_sigma_vm = 0.0;       // worst von Mises stress [Pa]
 };
 
 struct PackagingReport {
@@ -88,6 +113,7 @@ struct PhysicalModel {
     double body_inertia_x = 0.0;
     double body_inertia_y = 0.0;
     std::vector<ArmStructuralResult> arm_structural;
+    std::vector<MemberLoadResult> network_structural;  // Phase 3: per-member per-load-case
 };
 
 }  // namespace hexaarch::physics

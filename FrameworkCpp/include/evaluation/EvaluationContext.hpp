@@ -49,6 +49,13 @@ struct EvaluationContext {
     double mission_time_emergency_min = 1.0;            // required fault-hover endurance [min]
     double power_auxiliary_w = 500.0;                   // avionics + payload auxiliary draw [W]
 
+    // Phase 4: Stiffness / deflection constraints (B in spec)
+    // Allowable limits applied to the worst-case (over all members × load cases) values.
+    // Deflection limit: 10 cm is tight for UAM arms but keeps compliance finite for CMA-ES.
+    // Rotation limit: 0.10 rad ≈ 5.7° gives visible indicator of excessive tip rotation.
+    double arm_tip_deflection_limit_m = 0.10;   // max allowable Euler-Bernoulli tip deflection [m]
+    double arm_tip_rotation_limit_rad = 0.10;   // max allowable tip rotation [rad] (~5.7°)
+
     std::vector<ObjectiveWeight> objective_weights{
         {"mass", 0.20},
         {"power", 0.20},
@@ -58,7 +65,7 @@ struct EvaluationContext {
         {"structural", 0.0},
         {"packaging", 0.0},
         {"structural_safety", 0.0},
-        {"acs_margin", 0.10}
+        {"acs_margin_penalty", 0.10}
     };
 };
 

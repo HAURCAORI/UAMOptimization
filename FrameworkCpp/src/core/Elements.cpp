@@ -412,6 +412,11 @@ double ArmElement::secondMomentOfArea() const {
     return second_moment_of_area_;
 }
 
+double ArmElement::polarMomentOfArea() const {
+    // For circular hollow section: J = π/32*(Do⁴−Di⁴) = 2I exactly.
+    return 2.0 * second_moment_of_area_;
+}
+
 void ArmElement::clearLoads() {
     loads_.clear();
 }
