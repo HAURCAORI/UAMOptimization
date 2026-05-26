@@ -1,40 +1,42 @@
+# FrameworkCpp Optimization Overview
 
-## FrameworkCpp - Optimization Reference
+This is the top-level optimization reference for `FrameworkCpp`.
 
-This document describes the hexacopter design optimization in `FrameworkCpp`:
-design parameters, spatial element models, physical equations, constraints,
-and optimizer configuration.
+It explains the flow of data and where each optimization concern lives in the codebase. For the current variable and hard-constraint list, use `docs/Optimization_Constraints_And_Design_Variables.md`.
 
----
+## Document map
 
-## 1. Architecture Overview
+- `Optimization.md`: overall evaluation and optimizer flow
+- `Optimization_Constraints_And_Design_Variables.md`: current active variables, inactive registered parameters, and hard constraints
+- `Phase2_Powertrain_Battery.md`: powertrain and battery model details
+- `Action.md`: implementation checklist for extending the optimization stack
 
-`HexacopterArchitecture` is the root object. It owns a `ParameterRegistry`,
-a `ConstraintRegistry`, a list of `SpatialElement` objects, and a list of
-`Attachment` kinematic links. After any parameter change,
-`updateFromParameters()` re-evaluates every element and re-assembles the
-scene graph.
+## Architecture-to-objective flow
 
-Data flow:
+The optimization loop is:
 
-    ParameterRegistry --> SpatialElement x N --> AssemblyState
-                                                      |
-                                            VehicleScalingModel
-                                                      |
-                                              PhysicalModel
-                                                      |
-                                             Stage1Evaluator
-                                                      |
-                                           EvaluationResult
-                                          /               \
-                                  Stage1Metrics     ConstraintResults
+```text
+active parameters
+  -> DesignVectorMapper / BoundsBuilder
+  -> candidate HexacopterArchitecture
+  -> VehicleScalingModel
+  -> StructuralAnalyzer
+  -> AttainableControlSetAnalyzer
+  -> PowertrainEvaluator
+  -> BatteryEvaluator
+  -> hard constraint evaluation
+  -> ObjectiveAggregator
+  -> pagmo fitness
+```
 
----
+Main implementation points:
 
-## 2. Design Parameters
+- parameter registration: [HexacopterArchitecture.cpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/src/core/HexacopterArchitecture.cpp:1)
+- optimizer adapter: [PagmoProblemAdapter.cpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/src/optimization/PagmoProblemAdapter.cpp:1)
+- Stage 1 evaluation: [Stage1Evaluator.cpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/src/evaluation/Stage1Evaluator.cpp:1)
+- objective weighting: [ObjectiveAggregator.cpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/src/evaluation/ObjectiveAggregator.cpp:1)
 
-Parameters are stored in `ParameterRegistry` with stable key
-`"<architecture-id>::<name>"`.
+## Design-vector handling
 
 | Name               | Symbol   | Unit | Default | Bounds         | Active |
 |--------------------|----------|------|---------|----------------|--------|
@@ -52,154 +54,171 @@ Parameters are stored in `ParameterRegistry` with stable key
 Active parameters (7): Lx, Lyi, Lyo, T_max, arm_outer_radius, arm_wall_thickness, m_bat.
 Inactive parameters are fixed at their defaults during optimization.
 
-**Normalization.** The optimizer works in normalized space:
+- packs active parameters into a normalized vector
+- unpacks normalized values back into the cloned architecture
+- calls `architecture.updateFromParameters()` after assignment
 
     x_norm = (x - x_lower) / (x_upper - x_lower) * scale    (scale = 1.0 for all)
 
 Pagmo sees bounds [0, 1] for each active parameter. The lower bound maps to
 x_norm = 0; the upper bound to x_norm = 1.0 (= scale).
 
----
+`PagmoProblemAdapter::problem()`:
 
-## 3. Spatial Elements
+- exports physical bounds and parameter IDs for reporting and CSV/JSON outputs
 
-### 3.1 Reference Constants
+## Evaluation stages
 
-| Symbol    | Value          | Description                        |
-|-----------|----------------|------------------------------------|
-| m_ref     | 2240.73 kg     | Baseline total vehicle mass        |
-| m_pay_0   | 1500.0 kg      | Baseline payload mass              |
-| m_mot_0   | 74.07 kg       | Baseline motor mass                |
-| Tmax_0    | 7327.0 N       | Baseline motor maximum thrust      |
-| Lx_0      | 2.65 m         | Baseline fore/aft arm length       |
-| Lyi_0     | 2.65 m         | Baseline inner lateral arm length  |
-| Lyo_0     | 5.50 m         | Baseline outer lateral arm length  |
-| d_prop_0  | 0.40 m         | Baseline propeller diameter        |
-| Ix_0      | 12000 kg*m^2   | Baseline body inertia about x-axis |
-| Iy_0      | 9400 kg*m^2    | Baseline body inertia about y-axis |
-| g         | 9.81 m/s^2     | Gravitational acceleration         |
+### 1. Vehicle model
 
----
+`VehicleScalingModel` builds the physical model from the current architecture:
 
-### 3.2 BodyElement
+- total mass
+- COM and inertia
+- allocation matrix and faulted allocation matrices
+- packaging clearance metrics
+- structural aggregate metrics such as arm span and normalized bending index
 
-Central chassis. Zero mass; serves as the attachment root for all other
-elements.
+### 2. Structural analysis
 
-**Parameters consumed:** Lx, Lyi, Lyo
+`StructuralAnalyzer` evaluates arm section properties and loads to compute:
 
-**Geometry (box half-extents):**
+- per-arm bending stress
+- per-arm safety factor
+- minimum arm safety factor across the vehicle
 
-    hx = max(0.35, 0.10*Lx  + 0.10)
-    hy = max(0.35, 0.10*Lyi + 0.10)
-    hz = 0.20
+This is why `ArmElement` implements `IStructuralBeam` and `ILoadReceiver`.
 
-Padding = 0.05 m. Mass = 0.
+### 3. ACS / controllability analysis
 
-**Anchors:**
+`AttainableControlSetAnalyzer` evaluates:
 
-| Anchor | Local translation |
-|--------|-------------------|
-| center | (0, 0, 0)         |
-| top    | (0, 0, +hz)       |
-| bottom | (0, 0, -hz)       |
+- nominal hover trim
+- single-fault hover trims
+- ACS retention and margin metrics
+- the current hover-feasibility margin used by hard constraints
 
-**Constraints registered:**
-- `body_span_order`: min(Lx, Lyi, Lyo - Lyi) >= 0
+### 4. Powertrain analysis
 
----
+`PowertrainEvaluator` computes:
 
-### 3.3 ArmElement (x6)
+- nominal total electrical hover power
+- worst-fault total electrical hover power
+- worst nominal thrust utilization
+- worst nominal power utilization
 
-Six structural arms connecting the body to the motors.
+This phase uses effective disk area derived from arm geometry, not directly from `d_prop`.
 
-**Parameters consumed:** Lx, Lyi, Lyo, Tmax
+### 5. Battery analysis
 
-**Arm length by index:**
+`BatteryEvaluator` computes:
 
-    L_arm(i) = Lyo                      if i in {2, 3}  (outer lateral)
-             = sqrt(Lx^2 + Lyi^2)       otherwise       (diagonal)
+- available battery energy
+- nominal and emergency mission energy demand
+- energy reserve fraction
+- peak C-rate
+- battery mass fraction
 
-**Frame mass (shared across all six arms):**
+These feed the Phase 2 hard constraints.
 
-    S_arm     = 2*Lx + 2*Lyi + 2*Lyo
-    S_arm_0   = 2*2.65 + 2*2.65 + 2*5.50 = 21.60 m
+### 6. Hard constraint evaluation
 
-    m_frame_0 = m_ref - m_pay_0 - 6*m_mot_0
-              = 2240.73 - 1500.0 - 444.42 = 296.31 kg
+The evaluator builds `ConstraintEvaluationContext` and runs all registered constraints from:
 
-    m_frame(Lx, Lyi, Lyo) = m_frame_0 * (S_arm / S_arm_0)
+- `HexacopterArchitecture::registerDefaultConstraints()`
+- each element's `registerConstraints()`
 
-    m_arm(i) = m_frame / 6
+Results are stored in `EvaluationResult.constraint_results`.
 
-**Inertia (arm local frame, about mid-span):**
+### 7. Objective aggregation
 
-    Ixx = 1e-6
-    Iyy = Izz = m_arm * L_arm^2 / 12
+`ObjectiveAggregator` selects only objectives with positive weights from `EvaluationContext.objective_weights`, then computes:
 
-**Geometry:** segment of length L_arm, radius 0.05 m.
+```text
+combined_objective = sum(weight_i * value_i) / sum(weight_i)
+```
 
-**Anchors:**
+Inactive objectives can still be computed and exported without affecting the weighted-sum SOO objective.
 
-| Anchor | Local translation |
-|--------|-------------------|
-| root   | (0, 0, 0)         |
-| tip    | (L_arm, 0, 0)     |
+## Feasibility
 
-**Capabilities:** `IStructuralMember` - contributes L_arm to the total
-structural span; its mass counts toward `frame_mass`.
+A result is feasible only if:
 
-**Constraints registered:**
-- `arm_length_positive`: L_arm(i) >= 0
+1. nominal hover trim is feasible
+2. all-fault hover is feasible when `require_all_fault_acs_feasible` is enabled
+3. every active hard constraint is feasible
 
----
+Infeasible points are still evaluated, exported, and penalized so pagmo can search with a gradient-like signal through violation magnitudes.
 
-### 3.4 MotorElement (x6)
+## Pagmo integration
 
-Motor + ESC assembly. Mass scales allometrically with peak thrust.
+`PagmoProblemAdapter` is the single integration point with pagmo.
 
-**Parameters consumed:** Tmax
+Responsibilities:
 
-**Motor mass (allometric scaling):**
+- clone the architecture
+- unpack normalized variables
+- run Stage 1 evaluation
+- expose bounds
+- return either:
+  - a single weighted-sum fitness for SOO, or
+  - an objective vector for MOO
+- add weighted hard-constraint penalties
 
-    m_mot(Tmax) = m_mot_0 * (Tmax / Tmax_0)^(3/3.5)
+Penalty behavior:
 
-**Geometry (cylinder, rotated 90 deg about x):**
+- each violated active hard constraint contributes `penalty_weight * violation`
+- an additional infeasibility constant is applied when the result is not feasible
 
-    r_mot = 0.08 + 0.04 * (Tmax / Tmax_0)
-    h_mot = 0.12 m
+## SOO and MOO defaults
 
-**Anchors:** `mount`, `axis` (both at origin).
+### SOO
 
-**Capabilities:** `IMotorMassContributor` - world-frame position used to
-compute inertia corrections.
+Implementation: [SooRunner.cpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/src/optimization/SooRunner.cpp:1)
 
-**Constraints registered:**
-- `motor_thrust_positive`: Tmax >= 0
+- algorithm: CMA-ES
+- objective name: `combined`
+- default population: 24
+- default generations: 40
+- default seed: 42
 
----
+Outputs:
 
-### 3.5 RotorElement (x6)
+- baseline result
+- best raw result
+- best feasible result if one exists
+- parameter and comparison exports
 
-Propeller disk. Zero mass; position and yaw sign feed the allocation matrix.
+### MOO
 
-**Parameters consumed:** d_prop
+Implementation: [MooRunner.cpp](C:/Local/Matlab/UAMOptimization/FrameworkCpp/src/optimization/MooRunner.cpp:1)
 
-**Geometry:** disk of radius d_prop/2, padding 0.01 m.
+- algorithm: NSGA-II
+- default population: 32
+- default generations: 60
+- default seed: 42
+- config default objective set in code: `mass`, `power`, `fault_thrust`, `fault_alloc`, `hover_nom`
+- CLI currently uses: `mass`, `power`, `fault_alloc`
 
-**Yaw moment signs** (index 0 to 5): [-1, -1, +1, +1, -1, +1]
+Outputs:
 
-**Anchors:** `axis`, `center` (both at origin).
+- full population
+- feasible sub-population
+- Pareto CSV / JSON exports
+- knee-point analysis through `ParetoAnalyzer`
 
-**Capabilities:** `IPropulsionRotor` - provides `rotorIndex()` and
-`yawMomentSign()` to `VehicleScalingModel`.
+## Export and reporting
 
-**Constraints registered:**
-- `rotor_diameter_positive`: d_prop >= 0
+Key export points:
 
----
+- `CsvExporter::writeSooComparisonCsv`
+- `CsvExporter::writeSooParametersCsv`
+- `CsvExporter::writeParetoCsv`
+- `CsvExporter::writeParetoParametersCsv`
+- `CsvExporter::writeSooJson`
+- `CsvExporter::writeMooJson`
 
-### 3.6 BatteryElement
+Key reporting points:
 
 Battery pack. Mass = m_bat (Phase 2 design variable) — contributes directly
 to total vehicle mass and creates a feedback loop with the hover thrust
@@ -209,11 +228,14 @@ requirement.
 
 **Mass:** m_bat (active design variable, default 400 kg)
 
-**Geometry (box):**
+Older optimization notes in this folder had drift in several areas. Current code now includes:
 
-    L_bat = 0.35 + 0.08 * (Tmax / Tmax_0)
-    w_bat = 0.25 + 0.10 * d_prop
-    h_bat = 0.12 m  (half-height)
+- active structural variables: `arm_outer_radius`, `arm_wall_thickness`
+- active battery variable: `m_bat`
+- structural hard constraint: `arm_yield_failure`
+- battery hard constraints: `battery_energy_reserve`, `battery_crate_limit`
+- ACS hard constraints: `all_faults_hover_feasible`, `fault_directional_margin`
+- additional objective slots: `structural_safety`, `acs_margin`
 
 **Anchors:** `mount`, `center` (both at origin).
 
