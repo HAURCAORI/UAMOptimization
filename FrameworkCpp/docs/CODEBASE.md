@@ -412,12 +412,12 @@ acs_vertices.csv      full 4D vertex cloud (nominal + worst-fault motor)
     `failed_hover_gamma` and `fault_allocation_ratio`. Do not confuse with the Stage1Metrics field
     names `fault_thrust` and `fault_alloc`, which are soft objective proxies computed differently.
 
-11. **Phase 2 power model uses arm geometry, not d_prop**: `PowertrainEvaluator` sets
-    `r_eff = max_arm_length / 2` as the effective rotor disk radius. `d_prop = 0.40 m` is frozen
-    for cT (yaw torque) only. Using d_prop for power would give >100× too much power at this
-    vehicle mass. See `docs/Phase2_Powertrain_Battery.md`. (Note: the hover power proxy in
-    Stage1Evaluator still uses d_prop for the `power` objective normalization, which is correct —
-    this is a different quantity from the Phase 2 actuator-disk model.)
+11. **Power model unification**: Both the `power` soft objective and the powertrain evaluator
+    use `r_eff = max_arm_length / 2` as the effective rotor disk radius via `PowertrainEvaluator`.
+    `d_prop = 0.40 m` is frozen for cT (yaw torque) only — do not use it for power.
+    `Stage1Evaluator` computes `result.stage1.power = result.powertrain.total_power_nominal_w /
+    s_reference_power_w`, where `s_reference_power_w` is the static reference architecture power
+    from `PowertrainEvaluator` (initialized once at first call). Baseline self-normalizes to 1.0.
 
 12. **Battery mass feedback loop**: `BatteryElement.mass_` is now set from `m_bat->value`, so
     adding battery mass increases hover thrust, which increases hover power, which increases energy

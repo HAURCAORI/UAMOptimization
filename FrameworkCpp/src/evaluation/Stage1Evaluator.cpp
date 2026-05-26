@@ -17,16 +17,6 @@
 namespace hexaarch::evaluation {
 namespace {
 
-double hoverPowerProxy(const std::array<double, 6>& thrust, const double propeller_diameter) {
-    constexpr double pi = 3.14159265358979323846;
-    const double disk_area = pi * std::pow(0.5 * propeller_diameter, 2);
-    double power = 0.0;
-    for (const double thrust_i : thrust) {
-        power += std::pow(std::max(thrust_i, 0.0), 1.5);
-    }
-    return power / std::max(std::sqrt(disk_area), 1e-9);
-}
-
 double scaledControlEffectiveness(
     const physics::AllocationMatrix& matrix,
     const std::array<double, 6>& upper_bounds,
@@ -78,6 +68,16 @@ EvaluationResult Stage1Evaluator::evaluate(
             ref.propulsion.thrust_max,
             ref.mass_properties.mass,
             ref.propulsion.gravity);
+    }();
+    static const double s_reference_power_w = []() {
+        const physics::PowertrainEvaluator pt;
+        const auto powertrain = pt.evaluate(
+            s_reference_acs.nominal.trim_thrust,
+            s_reference_acs.nominal.trim_thrust,
+            s_reference_model.propulsion.thrust_max,
+            s_reference_model.structural.max_arm_length,
+            EvaluationContext{});
+        return std::max(powertrain.total_power_nominal_w, 1e-9);
     }();
     const physics::PhysicalModel& reference_model = s_reference_model;
 
@@ -205,15 +205,9 @@ EvaluationResult Stage1Evaluator::evaluate(
               2)
         : std::numeric_limits<double>::infinity();
 
-    const double nominal_power = nominal_trim.trim_feasible
-        ? hoverPowerProxy(nominal_trim.trim_thrust, result.physical_model.propulsion.propeller_diameter)
+    result.stage1.power = nominal_trim.trim_feasible
+        ? result.powertrain.total_power_nominal_w / s_reference_power_w
         : std::numeric_limits<double>::infinity();
-
-    // Reference vehicle power for normalization (uses cached static ACS result).
-    const double reference_power = s_reference_acs.nominal.trim_feasible
-        ? hoverPowerProxy(s_reference_acs.nominal.trim_thrust, reference_model.propulsion.propeller_diameter)
-        : std::max(result.physical_model.reference_power, 1e-9);
-    result.stage1.power = nominal_power / std::max(reference_power, 1e-9);
 
     // --- Legacy fault-tolerance proxies (kept for backwards-compatible objectives) ---
     double gamma_worst = std::numeric_limits<double>::infinity();
