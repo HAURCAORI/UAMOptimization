@@ -3,6 +3,8 @@
 #include <array>
 #include <string>
 
+#include "core/HexacopterArchitecture.hpp"
+
 namespace hexaarch::core {
 namespace {
 
@@ -43,7 +45,8 @@ Eigen::Isometry3d poseFromDirection(const Eigen::Vector3d& origin, const Eigen::
 
 std::vector<SpatialElementPtr> DefaultHexacopterBuilder::buildElements(const DefaultHexacopterParameters& parameters) {
     std::vector<SpatialElementPtr> elements;
-    elements.push_back(std::make_unique<BodyElement>("body", parameters.Lx, parameters.Lyi, parameters.Lyo));
+    elements.push_back(std::make_unique<BodyHullElement>("body", parameters.Lx, parameters.Lyi, parameters.Lyo));
+    elements.push_back(std::make_unique<BodyFrameElement>("body_frame"));
     elements.push_back(std::make_unique<BatteryElement>("battery", parameters.m_bat, parameters.Tmax, parameters.dprop));
     elements.push_back(std::make_unique<PayloadElement>("payload", parameters.payload));
 
@@ -64,8 +67,34 @@ std::vector<Attachment> DefaultHexacopterBuilder::buildAttachments(const Default
     attachments.push_back({"", "body", "", "center", AttachmentRelationship::rigidMount(), true, "", AttachmentContactPolicy::bonded_overlap, [](const HexacopterArchitecture&) {
         return Eigen::Isometry3d::Identity();
     }});
-    attachments.push_back({"body", "battery", "bottom", "mount", AttachmentRelationship::localOffset({0.0, 0.0, 0.02}), true, "central", AttachmentContactPolicy::bonded_overlap, nullptr});
-    attachments.push_back({"body", "payload", "bottom", "center", AttachmentRelationship::localOffset({0.0, 0.0, -0.05}), true, "central", AttachmentContactPolicy::bonded_overlap, nullptr});
+    attachments.push_back({
+        "body", "body_frame", "center", "center",
+        AttachmentRelationship::rigidMount(), true, "",
+        AttachmentContactPolicy::bonded_overlap, nullptr
+    });
+    // Battery: base offset 0.30 m from body bottom (z=-1.00 m) → center z=-0.70 m at z_bat_offset=0,
+    // giving 0.06 m clearance from cabin floor (z=-0.90 m). z_bat_offset DOF shifts from baseline.
+    attachments.push_back({
+        "body", "battery", "bottom", "mount",
+        AttachmentRelationship::rigidMount(), true, "central",
+        AttachmentContactPolicy::bonded_overlap,
+        [](const HexacopterArchitecture& arch) {
+            Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
+            pose.translation() = Eigen::Vector3d(0.0, 0.0, 0.30 + arch.batteryZOffset());
+            return pose;
+        }
+    });
+    // Payload: centered inside fuselage by default; x_payload/y_payload DOFs shift in horizontal plane.
+    attachments.push_back({
+        "body", "payload", "center", "center",
+        AttachmentRelationship::rigidMount(), true, "central",
+        AttachmentContactPolicy::bonded_overlap,
+        [](const HexacopterArchitecture& arch) {
+            Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
+            pose.translation() = Eigen::Vector3d(arch.payloadXOffset(), arch.payloadYOffset(), 0.0);
+            return pose;
+        }
+    });
 
     for (int index = 0; index < 6; ++index) {
         const std::string slot = std::to_string(index + 1);

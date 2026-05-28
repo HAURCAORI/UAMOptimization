@@ -258,7 +258,7 @@ TEST(CoreComposition, PublicApiSupportsCustomGraphAndCopy) {
     ASSERT_NE(Tmax, nullptr);
     ASSERT_NE(dprop, nullptr);
 
-    architecture.addElement(std::make_unique<hexaarch::core::BodyElement>("custom_body", Lx, Lyi, Lyo));
+    architecture.addElement(std::make_unique<hexaarch::core::BodyHullElement>("custom_body", Lx, Lyi, Lyo));
     architecture.addElement(std::make_unique<hexaarch::core::BatteryElement>("custom_battery", Tmax, dprop));
     architecture.addAttachment({
         "",

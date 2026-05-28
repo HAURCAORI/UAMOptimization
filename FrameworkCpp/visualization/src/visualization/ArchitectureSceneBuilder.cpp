@@ -9,8 +9,11 @@ namespace {
 using PrimitiveKind = core::GeometryPrimitive::Kind;
 
 std::array<float, 4> colorForElementType(const std::string_view element_type) {
-    if (element_type == "BodyElement") {
+    if (element_type == "BodyHullElement") {
         return {0.25f, 0.27f, 0.30f, 1.0f};
+    }
+    if (element_type == "BodyFrameElement") {
+        return {0.18f, 0.20f, 0.22f, 1.0f};
     }
     if (element_type == "BatteryElement") {
         return {0.20f, 0.45f, 0.90f, 1.0f};
@@ -26,6 +29,9 @@ std::array<float, 4> colorForElementType(const std::string_view element_type) {
     }
     if (element_type == "RotorElement") {
         return {0.20f, 0.70f, 0.35f, 1.0f};
+    }
+    if (element_type == "CabinEnvelopeElement") {
+        return {0.30f, 0.70f, 0.90f, 0.5f};
     }
     return {0.75f, 0.75f, 0.75f, 1.0f};
 }

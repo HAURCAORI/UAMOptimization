@@ -29,8 +29,12 @@ FrameworkCpp/
 │   │   │                           IStructuralBeam (extends IStructuralMember), ILoadReceiver,
 │   │   │                           IMotorMassContributor, IPayloadMassContributor,
 │   │   │                           IEnergyStorage (Phase 2)
-│   │   ├── Elements.hpp            Concrete elements: BodyElement, ArmElement, MotorElement,
-│   │   │                           PropellerElement, PayloadElement, BatteryElement (Phase 2)
+│   │   ├── Elements.hpp            Concrete elements: BodyHullElement (renamed from BodyElement),
+│   │   │                           BodyFrameElement (Task 5, hub chassis, zero-mass), ArmElement,
+│   │   │                           MotorElement, PropellerElement, PayloadElement,
+│   │   │                           BatteryElement (Phase 2), CabinEnvelopeElement,
+│   │   │                           OccupantEnvelopeElement (Step 3, zero-mass),
+│   │   │                           KeepOutZoneElement (Task 4, rotor keep-out cylinder with safety margin)
 │   │   ├── GeometryPrimitive.hpp   GeometryPrimitive struct (AABB, sphere, etc.)
 │   │   ├── HexacopterArchitecture.hpp  Root object; owns registry, elements, builder
 │   │   ├── ParameterRegistry.hpp   Registry for all DesignParameters
@@ -60,6 +64,7 @@ FrameworkCpp/
 │       │                           PackagingResult, PowertrainResult, BatteryResult (Phase 2)
 │       ├── PowertrainEvaluator.hpp Phase 2: per-motor electrical power (actuator-disk model)
 │       ├── PrimitiveDistance.hpp   Geometry collision/clearance helpers
+│       ├── ArchitecturePackagingEvaluator.hpp  Phase 6: rotor clearance + future containment
 │       ├── StructuralAnalyzer.hpp  Cantilever beam safety factor analysis (legacy; min_sf path)
 │       ├── StructuralNetworkAnalyzer.hpp  Phase 3: multi-member network (von Mises, deflection)
 │       └── VehicleScalingModel.hpp Mass/geometry/propulsion scaling
@@ -220,9 +225,12 @@ Baseline constants: `kBaselineLx=2.65`, `kBaselineLyi=2.65`, `kBaselineLyo=5.50`
 | `arm_outer_radius` | m | 0.08 | [0.02, 0.15] | **true** |
 | `arm_wall_thickness` | m | 0.005 | [0.001, 0.020] | **true** |
 | `m_bat` | kg | 400 | [100, 1000] | **true** (Phase 2) |
+| `z_bat_offset` | m | 0.0 | [−0.20, +0.50] | **true** (Task 3) |
+| `x_payload` | m | 0.0 | [−0.30, +0.30] | **true** (Task 3) |
+| `y_payload` | m | 0.0 | [−0.40, +0.40] | **true** (Task 3) |
 
-Active parameter count for optimizer: **7**
-(Lx, Lyi, Lyo, T_max, arm_outer_radius, arm_wall_thickness, m_bat).
+Active parameter count for optimizer: **10**
+(Lx, Lyi, Lyo, T_max, arm_outer_radius, arm_wall_thickness, m_bat, z_bat_offset, x_payload, y_payload).
 
 > **Topology constraint (motor 3/4 fault):** Motors 3,4 are on the pure-roll axis (y-axis, zero
 > pitch arm). When either fails, hover trim forces T1=T6=mg/2. ACS fault feasibility requires
@@ -320,6 +328,12 @@ Active parameter count for optimizer: **7**
 | `arm_yield_failure` | ≥ | 1.5 (configurable) | 2000 | `structural.min_safety_factor` (now set by StructuralNetworkAnalyzer, Phase 3) |
 | `arm_tip_deflection` | ≤ | 0.0 | 1500 | `(δ_max / δ_allow) − 1` where `δ_allow = arm_tip_deflection_limit_m` (Phase 4) |
 | `arm_tip_rotation` | ≤ | 0.0 | 1500 | `(θ_max / θ_allow) − 1` where `θ_allow = arm_tip_rotation_limit_rad` (Phase 4) |
+| `packaging::payload_in_cabin` | ≤ | 0.0 | 1000 | payload AABB containment violation inside cabin AABB |
+| `packaging::battery_in_cabin` | ≤ | 0.0 | 1000 | battery AABB containment violation inside cabin AABB |
+| `packaging::battery_payload_nonoverlap` | ≤ | 0.0 | 1000 | battery–payload AABB overlap magnitude |
+| `packaging::occupant_in_cabin` | ≤ | 0.0 | 1000 | occupant envelope containment violation inside cabin AABB |
+| `packaging::rotor_keepout` | ≤ | 0.0 | 1000 | max occupant/payload/battery overlap with any rotor keep-out cylinder (Task 4, reviewed) |
+| `packaging::cg_y_window` | ≤ | 0.0 | 500 | `|cg_y| − 0.05 m` (lateral CG symmetry) |
 | `battery_energy_reserve` | ≥ | 0.0 | 2000 | `bat_energy_reserve_fraction` (Phase 2) |
 | `battery_crate_limit` | ≤ | 0.0 | 1500 | `bat_c_rate / C_allow − 1` (Phase 2) |
 
@@ -419,12 +433,56 @@ acs_vertices.csv      full 4D vertex cloud (nominal + worst-fault motor)
     s_reference_power_w`, where `s_reference_power_w` is the static reference architecture power
     from `PowertrainEvaluator` (initialized once at first call). Baseline self-normalizes to 1.0.
 
-12. **Battery mass feedback loop**: `BatteryElement.mass_` is now set from `m_bat->value`, so
+12. **`IEnvelopeProvider` capability (Phase 6/7)**: `ElementCapabilities.hpp` defines `LocalAABB`
+    (axis-aligned bounding box with `containmentViolation()` and `overlapMagnitude()`) and
+    `IEnvelopeProvider::localEnvelope()`. `BodyHullElement`, `BatteryElement`, `CabinEnvelopeElement`,
+    `OccupantEnvelopeElement`, `PayloadElement`, and `KeepOutZoneElement` implement it. Containment checks are in
+    `ArchitecturePackagingEvaluator`; active constraints are `packaging::battery_in_cabin`,
+    `packaging::battery_payload_nonoverlap`, `packaging::occupant_in_cabin`, `packaging::payload_in_cabin`,
+    `packaging::rotor_keepout`.
+
+13. **Packaging evaluator separation (Phase 6)**: `ArchitecturePackagingEvaluator` owns all
+    packaging analysis. `VehicleScalingModel` no longer touches `model.packaging`.
+    `Stage1Evaluator` calls the evaluator after Phase 3 (structural network). The renamed field
+    `PackagingReport::minimum_rotor_clearance` (was `minimum_clearance`) is exported as
+    `pkg_rotor_clearance_m` in Stage1Metrics. Baseline value ≈ 3.47 m (no overlap).
+
+18. **Packaging element geometry (Step 3 / Tasks 1–3)**:
+    - `CabinEnvelopeElement`: zero-mass passenger cabin hull. kCabinHalfX=0.80, kCabinHalfY=0.90, kCabinHalfZ=0.90 m.
+      Attached to body "center" at offset (0,0,0). Cabin world z ∈ [−0.90, +0.90].
+    - `OccupantEnvelopeElement`: zero-mass seated-occupant keep-in zone. kOccupantHalfX=0.55, kOccupantHalfY=0.45, kOccupantHalfZ=0.60 m.
+      Attached to cabin_envelope "center" at offset (0,0,0). Occupant always contained in cabin at default.
+    - `BatteryElement`: base attachment offset 0.30 m from body bottom → battery center z=−0.70 m at z_bat_offset=0.
+      Battery z ∈ [−0.84, −0.56] ⊂ cabin [−0.90, +0.90] with 0.06 m floor clearance at default.
+    - `PayloadElement`: box primitive half-size (0.60, 0.60, 0.50) m. Centered at body center + (x_payload, y_payload, 0).
+    - Both `CabinEnvelopeElement` and `OccupantEnvelopeElement` are inserted in `HexacopterArchitecture::rebuildElements()`
+      (not in `DefaultHexacopterBuilder`) before the payload element.
+    - `KeepOutZoneElement`: zero-mass rotor keep-out cylinder (Task 4, reviewed 2026-05-27).
+      r_keepout = r_prop + kKeepOutRadialMargin (0.10 m for mfg tolerance + deflection + safety clearance).
+      kKeepOutHalfZ = 0.20 m (blade root flapping + hub protrusion + dynamic allowance).
+      Cylinder primitive for visualization. AABB valid because cylinder is rotationally symmetric in XY.
+      Checks: occupant envelope, payload, battery (arm/motor/rotor exempt via bonded_overlap).
+      Worst-case offending zone and element IDs stored in `PackagingReport` for diagnostics.
+      One per motor (keepout_1..keepout_6). Added in `rebuildElements()` / `rebuildAttachments()`.
+
+15. **Battery mass feedback loop**: `BatteryElement.mass_` is now set from `m_bat->value`, so
     adding battery mass increases hover thrust, which increases hover power, which increases energy
     requirement. The battery constraint (`battery_energy_reserve`) stabilises at ≈290 kg minimum
-    at baseline geometry, creating a non-trivial optimization gradient for `m_bat`.
+    at baseline geometry (6-min spec; now ≫290 kg at 30-min spec), creating a non-trivial
+    optimization gradient for `m_bat`.
 
-13. **MetricRole labeling (Phase 5)**: `MetricRole` enum (`hard_constraint`, `soft_objective`,
+16. **Mission time and endurance metric (2026-05-27)**:
+    - `mission_time_nominal_min = 30.0 min` (changed from 6 min) — represents a full UAM design
+      mission (takeoff + transit hover). The 6-min value made `battery_energy_reserve` trivially
+      satisfied at baseline and gave the optimizer no energy signal.
+    - `mission_time_emergency_min = 1.0 min` — unchanged; emergency post-fault landing margin.
+    - New `Stage1Metrics::bat_achievable_endurance_nom_min` (analysis_only, "min"):
+      `E_avail / (P_nom + P_aux) × 60`. Shows actual flyable hover time given current battery and power.
+      At baseline: ≈15.3 min (battery_energy_reserve violated since 15.3 < 30 min required).
+    - Power model (`BatteryEvaluator`): `E_req = P_nom_total × t_nom + P_fault_total × t_emg` (correct sequential budget).
+      C-rate: `c_rate = (max(P_nom, P_fault) + P_aux) / E_avail [1/h]` (voltage cancels). Both verified correct.
+
+16. **MetricRole labeling (Phase 5)**: `MetricRole` enum (`hard_constraint`, `soft_objective`,
     `analysis_only`) is defined in `include/evaluation/MetricRole.hpp`. The `stage1MetricDescriptors()`
     static table maps all ~35 Stage1Metrics fields to their role. `ObjectiveValue.role` is always
     `soft_objective` (set by `ObjectiveAggregator`). `ConstraintResult.metricRole()` returns
@@ -433,6 +491,13 @@ acs_vertices.csv      full 4D vertex cloud (nominal + worst-fault motor)
     array emitted by `evaluationToJson()`. Phase 4 context params (`arm_tip_deflection_limit_m`,
     `arm_tip_rotation_limit_rad`) appear in the `evaluation_context` JSON block.
 
-14. **Active parameter count (Phase 2)**: `m_bat` (active=true) brings the active parameter count
+17. **Active parameter count (Phase 2)**: `m_bat` (active=true) brings the active parameter count
     to 7: Lx, Lyi, Lyo, T_max, arm_outer_radius, arm_wall_thickness, m_bat.
     Check at runtime with `arch.parameters().activeParameters().size()`.
+
+19. **Placement DOF attachments (Task 3)**: Battery and payload attachments use
+    `relative_transform` lambdas that read from the architecture at `assemble()` time:
+    - Battery: `arch.batteryZOffset()` → translation (0, 0, 0.30 + z_bat_offset) from body bottom
+    - Payload: `arch.payloadXOffset()`, `arch.payloadYOffset()` → translation (x, y, 0) from body center
+    Lambdas capture no pointers — they use the `arch` argument, so copy-construction is safe.
+    Active parameter count rises to **10** with z_bat_offset, x_payload, y_payload.

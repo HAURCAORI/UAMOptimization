@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "visualization/ArchitectureSceneBuilder.hpp"
+#include "visualization/GltfLoader.hpp"
 #include "visualization/PrimitiveMeshFactory.hpp"
 
 #if __has_include(<GLFW/glfw3.h>) && __has_include(<vulkan/vulkan.h>) && __has_include(<volk.h>)
@@ -151,6 +152,7 @@ struct MeshResource {
     BufferResource vertex_buffer;
     BufferResource index_buffer;
     std::uint32_t index_count = 0;
+    std::string material_name;
 };
 
 struct FrameResources {
@@ -712,6 +714,12 @@ struct ArchitectureViewerApp::Impl {
 
     bool fillmode_nonsolid_supported = false;
     VkPipeline wireframe_pipeline = VK_NULL_HANDLE;
+    VkPipeline alpha_pipeline = VK_NULL_HANDLE;
+
+    std::vector<MeshResource> mannequin_meshes;
+    bool mannequin_loaded = false;
+    // Human reference figure placed 9 m in +Y, feet at Z = 0 (hub height).
+    Eigen::Vector3d mannequin_world_pos{0.0, 9.0, 0.0};
     VkSampleCountFlagBits msaa_samples = VK_SAMPLE_COUNT_4_BIT;
     VkImage msaa_color_image = VK_NULL_HANDLE;
     VkDeviceMemory msaa_color_memory = VK_NULL_HANDLE;
@@ -820,6 +828,10 @@ void destroySwapchainResources(ArchitectureViewerApp::Impl& impl) {
         impl.depth_memory = VK_NULL_HANDLE;
     }
 
+    if (impl.alpha_pipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(impl.device, impl.alpha_pipeline, nullptr);
+        impl.alpha_pipeline = VK_NULL_HANDLE;
+    }
     if (impl.wireframe_pipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(impl.device, impl.wireframe_pipeline, nullptr);
         impl.wireframe_pipeline = VK_NULL_HANDLE;
@@ -1203,6 +1215,33 @@ void createGraphicsPipeline(ArchitectureViewerApp::Impl& impl) {
         }
     }
 
+    // Alpha pipeline: solid fill, no back-face culling (both sides visible for envelopes),
+    // standard src-alpha blending, depth test on but no depth write (transparent objects last).
+    {
+        rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+        rasterizer.cullMode = VK_CULL_MODE_NONE;
+
+        depth_stencil.depthWriteEnable = VK_FALSE;
+
+        color_blend_attachment.blendEnable = VK_TRUE;
+        color_blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        color_blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        color_blend_attachment.colorBlendOp        = VK_BLEND_OP_ADD;
+        color_blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        color_blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        color_blend_attachment.alphaBlendOp        = VK_BLEND_OP_ADD;
+
+        if (vkCreateGraphicsPipelines(
+                impl.device,
+                VK_NULL_HANDLE,
+                1,
+                &pipeline_info,
+                nullptr,
+                &impl.alpha_pipeline) != VK_SUCCESS) {
+            std::cerr << "[ArchitectureViewerApp] Alpha pipeline creation failed; transparent objects will be opaque.\n";
+        }
+    }
+
     vkDestroyShaderModule(impl.device, frag_module, nullptr);
     vkDestroyShaderModule(impl.device, vert_module, nullptr);
 }
@@ -1472,6 +1511,64 @@ void uploadMesh(
     out_mesh.index_count = static_cast<std::uint32_t>(mesh.indices.size());
 }
 
+fs::path resolveAssetRoot() {
+    std::vector<fs::path> candidates;
+    candidates.push_back(fs::current_path() / "asset");
+#if defined(_WIN32)
+    char buf[MAX_PATH]{};
+    if (GetModuleFileNameA(nullptr, buf, MAX_PATH) > 0) {
+        const fs::path exe_dir = fs::path(buf).parent_path();
+        candidates.push_back(exe_dir / "asset");
+        candidates.push_back(exe_dir.parent_path() / "asset");
+        candidates.push_back(exe_dir.parent_path().parent_path() / "asset");
+        candidates.push_back(exe_dir.parent_path().parent_path().parent_path() / "asset");
+    }
+#endif
+    const fs::path probe = "ue4_mannequin_base_mesh" / fs::path("scene.gltf");
+    for (const auto& c : candidates) {
+        if (fs::exists(c / probe)) { return c; }
+    }
+    return {};
+}
+
+void loadMannequin(ArchitectureViewerApp::Impl& impl) {
+    const fs::path asset_root = resolveAssetRoot();
+    if (asset_root.empty()) {
+        std::cerr << "[ArchitectureViewerApp] Human reference model not found; skipping.\n";
+        return;
+    }
+    const fs::path gltf = asset_root / "ue4_mannequin_base_mesh" / "scene.gltf";
+    try {
+        // UE4 mannequin: Y height ≈ 182.53 cm → scale to exactly 1.80 m
+        constexpr float kMannequinHeight = 182.53f;
+        const float scale = 1.80f / kMannequinHeight;
+        const auto mesh_data = loadGltfMeshes(gltf, scale, true);
+        for (const auto& md : mesh_data) {
+            MeshResource resource;
+            uploadMesh(impl, md, resource);
+            resource.material_name = md.material_name;
+            impl.mannequin_meshes.push_back(std::move(resource));
+        }
+        impl.mannequin_loaded = !impl.mannequin_meshes.empty();
+        if (impl.mannequin_loaded) {
+            std::cout << "[ArchitectureViewerApp] Human reference loaded ("
+                      << impl.mannequin_meshes.size() << " meshes).\n";
+            PrimitiveInstance phantom;
+            phantom.primitive_type = core::GeometryPrimitive::Kind::box;
+            phantom.world_transform = Eigen::Isometry3d::Identity();
+            phantom.world_transform.translation() = impl.mannequin_world_pos
+                + Eigen::Vector3d(0.0, 0.0, 0.9);
+            phantom.dimensions = Eigen::Vector3d(0.35, 0.15, 0.9);
+            phantom.color = {0.0f, 0.0f, 0.0f, 0.0f};
+            phantom.visible = false;
+            phantom.source_element_type = "HumanReference";
+            impl.instances.push_back(phantom);
+        }
+    } catch (const std::exception& ex) {
+        std::cerr << "[ArchitectureViewerApp] Failed to load human reference: " << ex.what() << "\n";
+    }
+}
+
 void createMeshes(ArchitectureViewerApp::Impl& impl) {
     impl.meshes.clear();
 
@@ -1494,6 +1591,8 @@ void createMeshes(ArchitectureViewerApp::Impl& impl) {
     MeshResource segment;
     uploadMesh(impl, PrimitiveMeshFactory::makeUnitSegmentProxy(), segment);
     impl.meshes.emplace(core::GeometryPrimitive::Kind::segment, std::move(segment));
+
+    loadMannequin(impl);
 }
 
 void cleanupMeshes(ArchitectureViewerApp::Impl& impl) {
@@ -1502,6 +1601,12 @@ void cleanupMeshes(ArchitectureViewerApp::Impl& impl) {
         destroyBuffer(impl.device, mesh.index_buffer);
     }
     impl.meshes.clear();
+    for (auto& mesh : impl.mannequin_meshes) {
+        destroyBuffer(impl.device, mesh.vertex_buffer);
+        destroyBuffer(impl.device, mesh.index_buffer);
+    }
+    impl.mannequin_meshes.clear();
+    impl.mannequin_loaded = false;
 }
 
 void updateUniformBuffer(ArchitectureViewerApp::Impl& impl, const std::size_t frame_index) {
@@ -1553,20 +1658,23 @@ void recordCommandBuffer(
         0,
         nullptr);
 
-    VkPipeline bound_pipeline = VK_NULL_HANDLE;
-    for (const auto& instance : impl.instances) {
-        if (!instance.visible) {
-            continue;
-        }
+    // Two-pass rendering: opaque geometry first, then transparent (envelope) geometry.
+    // Transparent instances use the alpha_pipeline (blending on, depth write off).
+    const auto drawInstance = [&](const PrimitiveInstance& instance, VkPipeline& bound_pipeline) {
+        if (!instance.visible) { return; }
         const auto mesh_it = impl.meshes.find(instance.primitive_type);
-        if (mesh_it == impl.meshes.end()) {
-            continue;
+        if (mesh_it == impl.meshes.end()) { return; }
+
+        const bool is_transparent = instance.color[3] < 0.99f;
+        VkPipeline active_pipeline;
+        if ((instance.wireframe || impl.ui_wireframe) && impl.wireframe_pipeline != VK_NULL_HANDLE) {
+            active_pipeline = impl.wireframe_pipeline;
+        } else if (is_transparent && impl.alpha_pipeline != VK_NULL_HANDLE) {
+            active_pipeline = impl.alpha_pipeline;
+        } else {
+            active_pipeline = impl.graphics_pipeline;
         }
 
-        const VkPipeline active_pipeline =
-            ((instance.wireframe || impl.ui_wireframe) && impl.wireframe_pipeline != VK_NULL_HANDLE)
-                ? impl.wireframe_pipeline
-                : impl.graphics_pipeline;
         if (active_pipeline != bound_pipeline) {
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, active_pipeline);
             bound_pipeline = active_pipeline;
@@ -1592,6 +1700,47 @@ void recordCommandBuffer(
             &push);
 
         vkCmdDrawIndexed(command_buffer, mesh.index_count, 1, 0, 0, 0);
+    };
+
+    VkPipeline bound_pipeline = VK_NULL_HANDLE;
+    for (const auto& instance : impl.instances) {
+        if (instance.color[3] >= 0.99f) { drawInstance(instance, bound_pipeline); }
+    }
+
+    // Human reference mannequin: opaque, color driven by glTF material name.
+    if (impl.mannequin_loaded) {
+        // Neutral mannequin palette — both parts stay in the same warm-gray family
+        // so the figure reads as a unified silhouette against the coloured vehicle.
+        constexpr std::array<float, 4> kSkinColor  = {0.80f, 0.76f, 0.72f, 1.0f};  // light warm gray (body)
+        constexpr std::array<float, 4> kMetalColor = {0.48f, 0.48f, 0.52f, 1.0f};  // cool mid-gray (hardware)
+        if (impl.graphics_pipeline != bound_pipeline) {
+            vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, impl.graphics_pipeline);
+            bound_pipeline = impl.graphics_pipeline;
+        }
+        PushConstants mann_push{};
+        mann_push.model[0] = mann_push.model[5] = mann_push.model[10] = mann_push.model[15] = 1.0f;
+        mann_push.model[12] = static_cast<float>(impl.mannequin_world_pos.x());
+        mann_push.model[13] = static_cast<float>(impl.mannequin_world_pos.y());
+        mann_push.model[14] = static_cast<float>(impl.mannequin_world_pos.z());
+
+        for (const auto& mesh : impl.mannequin_meshes) {
+            const VkBuffer vbufs[] = {mesh.vertex_buffer.buffer};
+            constexpr VkDeviceSize voffsets[] = {0};
+            vkCmdBindVertexBuffers(command_buffer, 0, 1, vbufs, voffsets);
+            vkCmdBindIndexBuffer(command_buffer, mesh.index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+            const bool is_metal = (mesh.material_name.find("Metal") != std::string::npos
+                                || mesh.material_name.find("metal") != std::string::npos);
+            const auto& col = is_metal ? kMetalColor : kSkinColor;
+            std::memcpy(mann_push.color, col.data(), sizeof(mann_push.color));
+            vkCmdPushConstants(command_buffer, impl.pipeline_layout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0, sizeof(PushConstants), &mann_push);
+            vkCmdDrawIndexed(command_buffer, mesh.index_count, 1, 0, 0, 0);
+        }
+    }
+
+    for (const auto& instance : impl.instances) {
+        if (instance.color[3] < 0.99f) { drawInstance(instance, bound_pipeline); }
     }
 
 #ifdef HEXAARCH_HAS_IMGUI
@@ -1661,6 +1810,23 @@ void updateInput(ArchitectureViewerApp::Impl& impl) {
 
     if (glfwGetKey(impl.window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
         glfwSetWindowShouldClose(impl.window, GLFW_TRUE);
+    }
+
+    // WASD+QE: move human reference model in world space (0.05 m/frame ≈ 3 m/s at 60 fps).
+    if (impl.mannequin_loaded) {
+#ifdef HEXAARCH_HAS_IMGUI
+        if (!ImGui::GetIO().WantCaptureKeyboard) {
+#endif
+        constexpr double kStep = 0.01;
+        if (glfwGetKey(impl.window, GLFW_KEY_W) == GLFW_PRESS) impl.mannequin_world_pos.y() += kStep;
+        if (glfwGetKey(impl.window, GLFW_KEY_S) == GLFW_PRESS) impl.mannequin_world_pos.y() -= kStep;
+        if (glfwGetKey(impl.window, GLFW_KEY_A) == GLFW_PRESS) impl.mannequin_world_pos.x() -= kStep;
+        if (glfwGetKey(impl.window, GLFW_KEY_D) == GLFW_PRESS) impl.mannequin_world_pos.x() += kStep;
+        if (glfwGetKey(impl.window, GLFW_KEY_Q) == GLFW_PRESS) impl.mannequin_world_pos.z() += kStep;
+        if (glfwGetKey(impl.window, GLFW_KEY_E) == GLFW_PRESS) impl.mannequin_world_pos.z() -= kStep;
+#ifdef HEXAARCH_HAS_IMGUI
+        }
+#endif
     }
 }
 
@@ -2250,6 +2416,17 @@ void processPendingUpdates(ArchitectureViewerApp::Impl& impl) {
         impl.element_visibility = std::move(new_vis);
         ArchitectureSceneBuilder scene_builder;
         impl.instances = scene_builder.build(*impl.owned_arch);
+        if (impl.mannequin_loaded) {
+            PrimitiveInstance ph;
+            ph.primitive_type = core::GeometryPrimitive::Kind::box;
+            ph.world_transform = Eigen::Isometry3d::Identity();
+            ph.world_transform.translation() = impl.mannequin_world_pos + Eigen::Vector3d(0.0, 0.0, 0.9);
+            ph.dimensions = Eigen::Vector3d(0.35, 0.15, 0.9);
+            ph.color = {0.0f, 0.0f, 0.0f, 0.0f};
+            ph.visible = false;
+            ph.source_element_type = "HumanReference";
+            impl.instances.push_back(ph);
+        }
         appendSpatialReferences(impl.instances);
         applyVisibilityFlags(impl);
     }

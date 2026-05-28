@@ -1,6 +1,7 @@
 #include "core/HexacopterArchitecture.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <iostream>
 #include <stdexcept>
@@ -264,6 +265,18 @@ double HexacopterArchitecture::batteryMass() const {
     return mbat_parameter_->value;
 }
 
+double HexacopterArchitecture::batteryZOffset() const {
+    return zbatoff_parameter_->value;
+}
+
+double HexacopterArchitecture::payloadXOffset() const {
+    return xpayload_parameter_->value;
+}
+
+double HexacopterArchitecture::payloadYOffset() const {
+    return ypayload_parameter_->value;
+}
+
 bool HexacopterArchitecture::useVehicleModel() const {
     return use_vehicle_model_;
 }
@@ -297,6 +310,12 @@ void HexacopterArchitecture::registerDefaultParameters() {
     // Phase 2: battery mass design variable. Contributes to total mass and energy capacity.
     // Bounds calibrated so [100,1000] kg spans infeasible→comfortable energy reserve at baseline.
     parameters_.add({"m_bat", id_, "kg", "Battery pack mass", kBaselineBatteryMass, 100.0, 1000.0, kBaselineBatteryMass, true, 1.0});
+    // Task 3: placement DOFs. Base battery offset = 0.30 m from body bottom → center z = -0.70 m.
+    // Bounds [-0.20, +0.50] allow optimizer to explore; battery_in_cabin penalizes negative end.
+    parameters_.add({"z_bat_offset", id_, "m", "Battery z placement offset", 0.0, -0.20, 0.50, 0.0, true, 1.0});
+    // Payload x/y: bounds chosen to just exceed cabin half-size so the constraint has a gradient at the edge.
+    parameters_.add({"x_payload", id_, "m", "Payload x placement offset", 0.0, -0.30, 0.30, 0.0, true, 1.0});
+    parameters_.add({"y_payload", id_, "m", "Payload y placement offset", 0.0, -0.40, 0.40, 0.0, true, 1.0});
 }
 
 void HexacopterArchitecture::registerDefaultConstraints() {
@@ -352,7 +371,88 @@ void HexacopterArchitecture::registerDefaultConstraints() {
         1000.0,
         [](const ConstraintEvaluationContext& context) {
             Constraint constraint{"rotor_clearance", context.architecture.id(), ConstraintSense::greater_equal, 0.0};
-            return constraint.evaluate(context.physical_model.packaging.minimum_clearance);
+            return constraint.evaluate(context.physical_model.packaging.minimum_rotor_clearance);
+        }
+    });
+    constraints_.add({
+        "packaging::payload_in_cabin",
+        id_,
+        ConstraintSense::less_equal,
+        0.0,
+        true,
+        true,
+        1000.0,
+        [](const ConstraintEvaluationContext& context) {
+            Constraint constraint{"packaging::payload_in_cabin", context.architecture.id(), ConstraintSense::less_equal, 0.0};
+            return constraint.evaluate(context.physical_model.packaging.payload_containment_violation);
+        }
+    });
+    constraints_.add({
+        "packaging::battery_in_cabin",
+        id_,
+        ConstraintSense::less_equal,
+        0.0,
+        true,
+        true,
+        1000.0,
+        [](const ConstraintEvaluationContext& context) {
+            Constraint constraint{"packaging::battery_in_cabin", context.architecture.id(), ConstraintSense::less_equal, 0.0};
+            return constraint.evaluate(context.physical_model.packaging.battery_containment_violation);
+        }
+    });
+    constraints_.add({
+        "packaging::battery_payload_nonoverlap",
+        id_,
+        ConstraintSense::less_equal,
+        0.0,
+        true,
+        true,
+        1000.0,
+        [](const ConstraintEvaluationContext& context) {
+            Constraint constraint{"packaging::battery_payload_nonoverlap", context.architecture.id(), ConstraintSense::less_equal, 0.0};
+            return constraint.evaluate(context.physical_model.packaging.battery_payload_overlap);
+        }
+    });
+    constraints_.add({
+        "packaging::occupant_in_cabin",
+        id_,
+        ConstraintSense::less_equal,
+        0.0,
+        true,
+        true,
+        1000.0,
+        [](const ConstraintEvaluationContext& context) {
+            Constraint constraint{"packaging::occupant_in_cabin", context.architecture.id(), ConstraintSense::less_equal, 0.0};
+            return constraint.evaluate(context.physical_model.packaging.occupant_containment_violation);
+        }
+    });
+    constraints_.add({
+        "packaging::rotor_keepout",
+        id_,
+        ConstraintSense::less_equal,
+        0.0,
+        true,
+        true,
+        1000.0,
+        [](const ConstraintEvaluationContext& context) {
+            Constraint constraint{"packaging::rotor_keepout", context.architecture.id(), ConstraintSense::less_equal, 0.0};
+            return constraint.evaluate(context.physical_model.packaging.rotor_keepout_intrusion_m);
+        }
+    });
+    // Lateral CG symmetry: |cg_y| <= 0.05 m keeps rotor loading near symmetric.
+    constraints_.add({
+        "packaging::cg_y_window",
+        id_,
+        ConstraintSense::less_equal,
+        0.0,
+        true,
+        true,
+        500.0,
+        [](const ConstraintEvaluationContext& context) {
+            const double cg_y = std::abs(context.physical_model.mass_properties.center_of_mass.y());
+            constexpr double kCgYLimit = 0.05;
+            Constraint constraint{"packaging::cg_y_window", context.architecture.id(), ConstraintSense::less_equal, 0.0};
+            return constraint.evaluate(cg_y - kCgYLimit);
         }
     });
     constraints_.add({
@@ -547,7 +647,10 @@ void HexacopterArchitecture::bindCanonicalParameters() {
     payload_parameter_ = parameters_.find(id_ + "::m_payload");
     r_o_parameter_ = parameters_.find(id_ + "::arm_outer_radius");
     t_wall_parameter_ = parameters_.find(id_ + "::arm_wall_thickness");
-    mbat_parameter_ = parameters_.find(id_ + "::m_bat");
+    mbat_parameter_     = parameters_.find(id_ + "::m_bat");
+    zbatoff_parameter_  = parameters_.find(id_ + "::z_bat_offset");
+    xpayload_parameter_ = parameters_.find(id_ + "::x_payload");
+    ypayload_parameter_ = parameters_.find(id_ + "::y_payload");
 }
 
 void HexacopterArchitecture::rebuildElements() {
@@ -564,8 +667,27 @@ void HexacopterArchitecture::rebuildElements() {
         mbat_parameter_
     });
 
+    // CabinEnvelopeElement and OccupantEnvelopeElement inserted after buildElements()
+    // so they appear between battery and payload without DefaultHexacopterBuilder changes.
+    const auto payload_it = std::find_if(elements_.begin(), elements_.end(),
+        [](const SpatialElementPtr& e) { return e->id() == "payload"; });
+    elements_.insert(payload_it, std::make_unique<CabinEnvelopeElement>("cabin_envelope"));
+    elements_.insert(
+        std::find_if(elements_.begin(), elements_.end(),
+            [](const SpatialElementPtr& e) { return e->id() == "payload"; }),
+        std::make_unique<OccupantEnvelopeElement>("occupant_envelope"));
+
+    // KeepOutZoneElements: one per motor, representing the rotor swept disk volume.
+    for (int index = 0; index < 6; ++index) {
+        elements_.push_back(std::make_unique<KeepOutZoneElement>(
+            "keepout_" + std::to_string(index + 1), dprop_parameter_));
+    }
+
     for (auto& element : elements_) {
         element->registerParameters(parameters_);
+        if (auto* rotor = dynamic_cast<RotorElement*>(element.get())) {
+            rotor->registerThrustMax(Tmax_parameter_);
+        }
         element->updateFromParameters();
     }
 }
@@ -583,6 +705,32 @@ void HexacopterArchitecture::rebuildAttachments() {
         t_wall_parameter_,
         mbat_parameter_
     });
+
+    // Cabin envelope centred inside body hull (body "center" anchor = body origin).
+    // Body half-height (1.00 m) > cabin half-Z (0.90 m) → cabin always fits inside body.
+    attachments_.push_back({"body", "cabin_envelope", "center", "center",
+        AttachmentRelationship::localOffset({0.0, 0.0, 0.0}),
+        true, "", AttachmentContactPolicy::bonded_overlap, nullptr});
+    // Occupant envelope centred inside cabin (same origin — occupant space is a subset of cabin).
+    attachments_.push_back({"cabin_envelope", "occupant_envelope", "center", "center",
+        AttachmentRelationship::localOffset({0.0, 0.0, 0.0}),
+        true, "", AttachmentContactPolicy::bonded_overlap, nullptr});
+
+    // KeepOutZone elements sit at the motor axis — same position as the rotor disk.
+    for (int index = 0; index < 6; ++index) {
+        const std::string slot = std::to_string(index + 1);
+        attachments_.push_back({
+            "motor_" + slot,
+            "keepout_" + slot,
+            "axis",
+            "center",
+            AttachmentRelationship::rigidMount(),
+            true,
+            "",
+            AttachmentContactPolicy::bonded_overlap,
+            nullptr
+        });
+    }
 }
 
 void HexacopterArchitecture::assemble() {

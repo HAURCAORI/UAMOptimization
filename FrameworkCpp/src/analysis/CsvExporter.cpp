@@ -124,10 +124,18 @@ nlohmann::json stage1ToJson(const evaluation::Stage1Metrics& m) {
         {"bat_energy_reserve_fraction", m.bat_energy_reserve_fraction},
         {"bat_c_rate", m.bat_c_rate},
         {"bat_mass_fraction", m.bat_mass_fraction},
+        {"bat_achievable_endurance_nom_min", m.bat_achievable_endurance_nom_min},
         {"struct_net_min_safety_factor", m.struct_net_min_safety_factor},
         {"struct_net_max_tip_deflection_m", m.struct_net_max_tip_deflection_m},
         {"struct_net_max_tip_rotation_rad", m.struct_net_max_tip_rotation_rad},
-        {"struct_net_max_sigma_vm_pa", m.struct_net_max_sigma_vm_pa}
+        {"struct_net_max_sigma_vm_pa", m.struct_net_max_sigma_vm_pa},
+        {"pkg_rotor_clearance_m",           m.pkg_rotor_clearance_m},
+        {"pkg_payload_containment_m",       m.pkg_payload_containment_m},
+        {"pkg_battery_containment_m",       m.pkg_battery_containment_m},
+        {"pkg_battery_payload_overlap_m",   m.pkg_battery_payload_overlap_m},
+        {"pkg_occupant_containment_m",      m.pkg_occupant_containment_m},
+        {"cg_y_offset_m",                   m.cg_y_offset_m},
+        {"pkg_rotor_keepout_m",             m.pkg_rotor_keepout_m}
     };
 }
 
@@ -159,7 +167,7 @@ nlohmann::json physicalModelToJson(const physics::PhysicalModel& model) {
         {"mass", model.mass_properties.mass},
         {"center_of_mass", {com.x(), com.y(), com.z()}},
         {"inertia_diagonal", {I(0, 0), I(1, 1), I(2, 2)}},
-        {"minimum_clearance", model.packaging.minimum_clearance},
+        {"minimum_rotor_clearance", model.packaging.minimum_rotor_clearance},
         {"overlap_penalty", model.packaging.overlap_penalty},
         {"arm_span", model.structural.arm_span},
         {"normalized_bending_index", model.structural.normalized_bending_index},

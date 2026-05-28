@@ -71,12 +71,22 @@ const std::vector<MetricDescriptor>& stage1MetricDescriptors() {
         {"bat_energy_reserve_fraction",        MetricRole::hard_constraint,  ""},
         {"bat_c_rate",                         MetricRole::hard_constraint,  "1/h"},
         {"bat_mass_fraction",                  MetricRole::analysis_only,    ""},
+        {"bat_achievable_endurance_nom_min",   MetricRole::analysis_only,    "min"},
 
         // --- Structural network (Phase 3/4) ---
         {"struct_net_min_safety_factor",       MetricRole::hard_constraint,  ""},
         {"struct_net_max_tip_deflection_m",    MetricRole::hard_constraint,  "m"},
         {"struct_net_max_tip_rotation_rad",    MetricRole::hard_constraint,  "rad"},
         {"struct_net_max_sigma_vm_pa",         MetricRole::analysis_only,    "Pa"},
+
+        // --- Packaging (Phase 6/7) ---
+        {"pkg_rotor_clearance_m",              MetricRole::analysis_only,    "m"},
+        {"pkg_payload_containment_m",          MetricRole::hard_constraint,  "m"},
+        {"pkg_battery_containment_m",          MetricRole::hard_constraint,  "m"},
+        {"pkg_battery_payload_overlap_m",      MetricRole::hard_constraint,  "m"},
+        {"pkg_occupant_containment_m",         MetricRole::hard_constraint,  "m"},
+        {"cg_y_offset_m",                      MetricRole::hard_constraint,  "m"},
+        {"pkg_rotor_keepout_m",                MetricRole::hard_constraint,  "m"},
     };
     return table;
 }

@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace hexaarch::visualization {
@@ -14,6 +15,7 @@ struct MeshVertex {
 struct MeshData {
     std::vector<MeshVertex> vertices;
     std::vector<std::uint32_t> indices;
+    std::string material_name;
 };
 
 class PrimitiveMeshFactory {

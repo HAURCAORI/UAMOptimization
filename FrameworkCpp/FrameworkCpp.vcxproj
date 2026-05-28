@@ -77,6 +77,7 @@
     <ClCompile Include="src\physics\AttainableControlSetAnalyzer.cpp" />
     <ClCompile Include="src\physics\BatteryEvaluator.cpp" />
     <ClCompile Include="src\physics\PhysicsTypes.cpp" />
+    <ClCompile Include="src\physics\ArchitecturePackagingEvaluator.cpp" />
     <ClCompile Include="src\physics\PowertrainEvaluator.cpp" />
     <ClCompile Include="src\physics\PrimitiveDistance.cpp" />
     <ClCompile Include="src\physics\StructuralAnalyzer.cpp" />
@@ -86,6 +87,7 @@
     <ClCompile Include="visualization\src\visualization\ArchitectureViewerApp.cpp" />
     <ClCompile Include="visualization\src\visualization\PrimitiveInstance.cpp" />
     <ClCompile Include="visualization\src\visualization\PrimitiveMeshFactory.cpp" />
+    <ClCompile Include="visualization\src\visualization\GltfLoader.cpp" />
     <ClCompile Include="visualization\src\visualization\ViewerCamera.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -122,6 +124,7 @@
     <ClInclude Include="include\physics\BatteryEvaluator.hpp" />
     <ClInclude Include="include\physics\Material.hpp" />
     <ClInclude Include="include\physics\PhysicsTypes.hpp" />
+    <ClInclude Include="include\physics\ArchitecturePackagingEvaluator.hpp" />
     <ClInclude Include="include\physics\PowertrainEvaluator.hpp" />
     <ClInclude Include="include\physics\PrimitiveDistance.hpp" />
     <ClInclude Include="include\physics\StructuralAnalyzer.hpp" />
@@ -131,6 +134,7 @@
     <ClInclude Include="visualization\include\visualization\ArchitectureViewerApp.hpp" />
     <ClInclude Include="visualization\include\visualization\PrimitiveInstance.hpp" />
     <ClInclude Include="visualization\include\visualization\PrimitiveMeshFactory.hpp" />
+    <ClInclude Include="visualization\include\visualization\GltfLoader.hpp" />
     <ClInclude Include="visualization\include\visualization\ViewerCamera.hpp" />
   </ItemGroup>
   <PropertyGroup Label="Globals">

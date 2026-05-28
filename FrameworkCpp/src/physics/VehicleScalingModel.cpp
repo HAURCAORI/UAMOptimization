@@ -4,14 +4,11 @@
 #include <array>
 #include <cmath>
 #include <iostream>
-#include <limits>
 #include <utility>
 #include <vector>
 
 #include "core/ElementCapabilities.hpp"
-#include "core/Elements.hpp"
 #include "physics/AllocationMatrixBuilder.hpp"
-#include "physics/PrimitiveDistance.hpp"
 
 namespace hexaarch::physics {
 namespace {
@@ -128,34 +125,7 @@ PhysicalModel VehicleScalingModel::evaluate(const core::HexacopterArchitecture& 
     model.structural.normalized_bending_index =
         model.structural.bending_index / std::max(baseline_tmax * baseline_Lyo, 1e-9);
 
-    // Collect rotor elements for inter-rotor clearance (the physically relevant packaging
-    // constraint: rotor disks must not overlap). Arm/body/battery/payload structural elements
-    // share a common root attachment point and their primitives are not modelled at sufficient
-    // fidelity to yield meaningful clearance values against each other.
-    std::vector<const core::AssembledElement*> rotor_assembled;
-    for (const auto& assembled : architecture.assemblyState().elements) {
-        if (assembled.element != nullptr &&
-            dynamic_cast<const core::IPropulsionRotor*>(assembled.element) != nullptr) {
-            rotor_assembled.push_back(&assembled);
-        }
-    }
-
-    double minimum_clearance = rotor_assembled.empty() ? 0.0 : std::numeric_limits<double>::max();
-    for (std::size_t i = 0; i < rotor_assembled.size(); ++i) {
-        const auto& lhs = *rotor_assembled.at(i);
-        for (std::size_t j = i + 1; j < rotor_assembled.size(); ++j) {
-            const auto& rhs = *rotor_assembled.at(j);
-            for (const auto& lhs_primitive : lhs.local_primitives) {
-                for (const auto& rhs_primitive : rhs.local_primitives) {
-                    const double clearance = primitiveClearance(lhs_primitive, lhs.world_pose, rhs_primitive, rhs.world_pose);
-                    minimum_clearance = std::min(minimum_clearance, clearance);
-                }
-            }
-        }
-    }
-    model.packaging.minimum_clearance = minimum_clearance;
-    model.packaging.valid = minimum_clearance >= 0.0;
-    model.packaging.overlap_penalty = minimum_clearance >= 0.0 ? 0.0 : (-minimum_clearance / std::max(architecture.propellerDiameter(), 1e-9));
+    // Packaging analysis moved to ArchitecturePackagingEvaluator (called from Stage1Evaluator).
 
     const std::array<double, 6> nominal_hover_thrust{
         model.mass_properties.mass * model.propulsion.gravity / 6.0,

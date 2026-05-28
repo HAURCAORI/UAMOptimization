@@ -45,7 +45,7 @@ protected:
     std::vector<AnchorFrame> anchors_;
 };
 
-class PayloadElement final : public BasicSpatialElement, public IPayloadMassContributor {
+class PayloadElement final : public BasicSpatialElement, public IPayloadMassContributor, public IEnvelopeProvider {
 public:
     PayloadElement(std::string id, DesignParameter* payload_mass);
     [[nodiscard]] std::unique_ptr<SpatialElement> clone() const override;
@@ -53,19 +53,23 @@ public:
     void rebindParameters(ParameterRegistry& registry) override;
     void registerConstraints(ConstraintRegistry& registry) const override;
     void updateFromParameters() override;
+    [[nodiscard]] LocalAABB localEnvelope() const override;
 
 private:
     DesignParameter* payload_mass_;
 };
 
-class BodyElement final : public BasicSpatialElement {
+// Outer fuselage hull geometry and attachment anchor root.
+// Renamed from BodyElement; assembly ID remains "body" so all existing attachments are unchanged.
+class BodyHullElement final : public BasicSpatialElement, public IEnvelopeProvider {
 public:
-    BodyElement(std::string id, DesignParameter* Lx, DesignParameter* Lyi, DesignParameter* Lyo);
+    BodyHullElement(std::string id, DesignParameter* Lx, DesignParameter* Lyi, DesignParameter* Lyo);
     [[nodiscard]] std::unique_ptr<SpatialElement> clone() const override;
     void registerParameters(ParameterRegistry& registry) override;
     void rebindParameters(ParameterRegistry& registry) override;
     void registerConstraints(ConstraintRegistry& registry) const override;
     void updateFromParameters() override;
+    [[nodiscard]] LocalAABB localEnvelope() const override;
 
 private:
     DesignParameter* Lx_;
@@ -73,7 +77,20 @@ private:
     DesignParameter* Lyo_;
 };
 
-class BatteryElement final : public BasicSpatialElement, public IEnergyStorage {
+// Central structural hub/chassis — splits the structural frame concept from the outer hull.
+// Zero-mass at Stage 1 (frame mass remains distributed to arms via ArmElement::frameMass()).
+// Geometry: flat cylinder representing the arm-junction hub plate. No design parameters.
+class BodyFrameElement final : public BasicSpatialElement {
+public:
+    explicit BodyFrameElement(std::string id);
+    [[nodiscard]] std::unique_ptr<SpatialElement> clone() const override;
+    void registerParameters(ParameterRegistry& registry) override;
+    void rebindParameters(ParameterRegistry& registry) override;
+    void registerConstraints(ConstraintRegistry& registry) const override;
+    void updateFromParameters() override;
+};
+
+class BatteryElement final : public BasicSpatialElement, public IEnergyStorage, public IEnvelopeProvider {
 public:
     // m_bat: battery pack mass design variable (contributes to total mass and energy capacity).
     // thrust_max / propeller_diameter: used for geometry scaling only, not for mass.
@@ -85,11 +102,53 @@ public:
     void registerConstraints(ConstraintRegistry& registry) const override;
     void updateFromParameters() override;
     [[nodiscard]] double batteryMass() const override;
+    [[nodiscard]] LocalAABB localEnvelope() const override;
 
 private:
     DesignParameter* m_bat_;
     DesignParameter* thrust_max_;
     DesignParameter* propeller_diameter_;
+};
+
+class CabinEnvelopeElement final : public BasicSpatialElement, public IEnvelopeProvider {
+public:
+    explicit CabinEnvelopeElement(std::string id);
+    [[nodiscard]] std::unique_ptr<SpatialElement> clone() const override;
+    void registerParameters(ParameterRegistry& registry) override;
+    void rebindParameters(ParameterRegistry& registry) override;
+    void registerConstraints(ConstraintRegistry& registry) const override;
+    void updateFromParameters() override;
+    [[nodiscard]] LocalAABB localEnvelope() const override;
+};
+
+// Zero-mass virtual element that defines the minimum occupant space inside the cabin.
+// Smaller than CabinEnvelopeElement; used for cabin-fit and rotor keep-out constraints.
+class OccupantEnvelopeElement final : public BasicSpatialElement, public IEnvelopeProvider {
+public:
+    explicit OccupantEnvelopeElement(std::string id);
+    [[nodiscard]] std::unique_ptr<SpatialElement> clone() const override;
+    void registerParameters(ParameterRegistry& registry) override;
+    void rebindParameters(ParameterRegistry& registry) override;
+    void registerConstraints(ConstraintRegistry& registry) const override;
+    void updateFromParameters() override;
+    [[nodiscard]] LocalAABB localEnvelope() const override;
+};
+
+// Zero-mass virtual element representing the swept disk volume of one rotor.
+// One per motor; placed at the motor axis position. Used for rotor keep-out packaging checks.
+class KeepOutZoneElement final : public BasicSpatialElement, public IEnvelopeProvider {
+public:
+    explicit KeepOutZoneElement(std::string id, DesignParameter* propeller_diameter);
+    [[nodiscard]] std::unique_ptr<SpatialElement> clone() const override;
+    void registerParameters(ParameterRegistry& registry) override;
+    void rebindParameters(ParameterRegistry& registry) override;
+    void registerConstraints(ConstraintRegistry& registry) const override;
+    void updateFromParameters() override;
+    [[nodiscard]] LocalAABB localEnvelope() const override;
+
+private:
+    DesignParameter* propeller_diameter_;
+    double r_keepout_ = 0.0;  // cached: r_prop + kKeepOutRadialMargin
 };
 
 class ArmElement final : public BasicSpatialElement, public IStructuralBeam, public ILoadReceiver {
@@ -153,11 +212,13 @@ public:
     [[nodiscard]] int index() const;
     [[nodiscard]] int rotorIndex() const override;
     [[nodiscard]] double yawMomentSign() const override;
+    void registerThrustMax(DesignParameter* thrust_max);
 
 private:
     int index_;
     double yaw_moment_sign_;
     DesignParameter* propeller_diameter_;
+    DesignParameter* thrust_max_ = nullptr;
 };
 
 }  // namespace hexaarch::core

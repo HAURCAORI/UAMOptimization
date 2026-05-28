@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "evaluation/ObjectiveAggregator.hpp"
+#include "physics/ArchitecturePackagingEvaluator.hpp"
 #include "physics/AttainableControlSetAnalyzer.hpp"
 #include "physics/BatteryEvaluator.hpp"
 #include "physics/PowertrainEvaluator.hpp"
@@ -171,6 +172,14 @@ EvaluationResult Stage1Evaluator::evaluate(
         result.stage1.bat_energy_reserve_fraction = result.battery.energy_reserve_fraction;
         result.stage1.bat_c_rate                  = result.battery.c_rate;
         result.stage1.bat_mass_fraction           = result.battery.mass_fraction;
+
+        // Achievable hover endurance at nominal power (including auxiliary draw).
+        // Answers: how long could the vehicle fly if it hovered continuously at nominal trim?
+        const double p_nom_total_w = result.powertrain.total_power_nominal_w + context.power_auxiliary_w;
+        result.stage1.bat_achievable_endurance_nom_min =
+            (nominal_trim.trim_feasible && p_nom_total_w > 1e-9)
+            ? result.battery.available_energy_wh / p_nom_total_w * 60.0
+            : 0.0;
     }
 
     // --- Phase 3: Structural network (multi-load-case von Mises analysis) ---
@@ -192,6 +201,17 @@ EvaluationResult Stage1Evaluator::evaluate(
         result.stage1.struct_net_max_tip_rotation_rad = result.physical_model.structural.network_max_tip_rotation;
         result.stage1.struct_net_max_sigma_vm_pa      = result.physical_model.structural.network_max_sigma_vm;
     }
+
+    // --- Phase 4: Packaging (rotor clearance + payload containment) ---
+    physics::ArchitecturePackagingEvaluator{}.analyze(result.physical_model, architecture);
+    result.stage1.pkg_rotor_clearance_m     = result.physical_model.packaging.minimum_rotor_clearance;
+    result.stage1.pkg_payload_containment_m     = result.physical_model.packaging.payload_containment_violation;
+    result.stage1.pkg_battery_containment_m     = result.physical_model.packaging.battery_containment_violation;
+    result.stage1.pkg_battery_payload_overlap_m = result.physical_model.packaging.battery_payload_overlap;
+    result.stage1.pkg_occupant_containment_m    = result.physical_model.packaging.occupant_containment_violation;
+    result.stage1.cg_y_offset_m                 = std::abs(result.physical_model.mass_properties.center_of_mass.y());
+    result.stage1.pkg_rotor_keepout_m           = result.physical_model.packaging.rotor_keepout_intrusion_m;
+    // Offending zone/element IDs: result.physical_model.packaging.rotor_keepout_offending_{zone,element}_id
 
     // --- Mass objective ---
     result.stage1.mass =

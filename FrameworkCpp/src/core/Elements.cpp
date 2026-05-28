@@ -5,6 +5,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "eigen3/Eigen/Dense"
+
 #include "core/HexacopterArchitecture.hpp"
 
 namespace hexaarch::core {
@@ -15,12 +17,17 @@ constexpr double kBaselineMotorTmax = 7327.0;
 constexpr double kMotorMassExponent = 3.0 / 3.5;
 constexpr double kBaselinePayloadRadius = 0.60;
 
-// BodyElement geometry
-constexpr double kBodyHalfSizeBase   = 0.35;
+// BodyHullElement geometry — outer fuselage hull; must fully contain cabin and battery.
+// kBodyHalfSizeBase >= kCabinHalfX/Y (0.80/0.90); kBodyHalfHeight >= kCabinHalfZ (0.90).
+constexpr double kBodyHalfSizeBase   = 1.00;
 constexpr double kBodyHalfSizeScale  = 0.10;
 constexpr double kBodyHalfSizeOffset = 0.10;
-constexpr double kBodyHalfHeight     = 0.20;
+constexpr double kBodyHalfHeight     = 1.00;
 constexpr double kBodyBoxPadding     = 0.05;
+
+// BodyFrameElement geometry — central hub plate connecting arm roots.
+constexpr double kBodyFrameHubRadius = 0.30;
+constexpr double kBodyFrameHubHeight = 0.08;
 
 // BatteryElement geometry
 constexpr double kBatteryLengthBase  = 0.35;
@@ -29,6 +36,12 @@ constexpr double kBatteryWidthBase   = 0.25;
 constexpr double kBatteryWidthScale  = 0.10;
 constexpr double kBatteryHalfHeight  = 0.12;
 constexpr double kBatteryBoxPadding  = 0.02;
+
+// CabinEnvelopeElement — passenger cabin inner hull [m]; must contain payload box (±0.60, ±0.60, ±0.50).
+// Height 1.80 m (= 2*kCabinHalfZ) matches the 180 cm human reference mannequin.
+constexpr double kCabinHalfX = 0.80;   // 1.60 m wide — 2-seat abreast
+constexpr double kCabinHalfY = 0.90;   // 1.80 m deep — 2-row seating with legroom
+constexpr double kCabinHalfZ = 0.90;   // 1.80 m tall — standing headroom for mannequin
 
 // MotorElement geometry
 constexpr double kMotorRadiusBase      = 0.08;
@@ -164,38 +177,58 @@ void PayloadElement::registerConstraints(ConstraintRegistry& registry) const {
     });
 }
 
+constexpr double kPayloadBoxHalfX = 0.60;
+constexpr double kPayloadBoxHalfY = 0.60;
+constexpr double kPayloadBoxHalfZ = 0.50;
+
 void PayloadElement::updateFromParameters() {
     mass_ = payload_mass_->value;
     local_com_.setZero();
     local_inertia_.setZero();
-    primitives_ = {GeometryPrimitive::makeSphere(kBaselinePayloadRadius)};
+    primitives_ = {GeometryPrimitive::makeBox({kPayloadBoxHalfX, kPayloadBoxHalfY, kPayloadBoxHalfZ}, 0.0)};
     anchors_.clear();
     setAnchor("center", Eigen::Isometry3d::Identity());
 }
 
-BodyElement::BodyElement(std::string id, DesignParameter* Lx, DesignParameter* Lyi, DesignParameter* Lyo)
-    : BasicSpatialElement(std::move(id), "BodyElement"),
+LocalAABB PayloadElement::localEnvelope() const {
+    return {
+        Eigen::Vector3d{-kPayloadBoxHalfX, -kPayloadBoxHalfY, -kPayloadBoxHalfZ},
+        Eigen::Vector3d{+kPayloadBoxHalfX, +kPayloadBoxHalfY, +kPayloadBoxHalfZ}
+    };
+}
+
+LocalAABB BodyHullElement::localEnvelope() const {
+    const double half_x = std::max(kBodyHalfSizeBase, kBodyHalfSizeScale * Lx_->value + kBodyHalfSizeOffset);
+    const double half_y = std::max(kBodyHalfSizeBase, kBodyHalfSizeScale * Lyi_->value + kBodyHalfSizeOffset);
+    return {
+        Eigen::Vector3d{-half_x, -half_y, -kBodyHalfHeight},
+        Eigen::Vector3d{+half_x, +half_y, +kBodyHalfHeight}
+    };
+}
+
+BodyHullElement::BodyHullElement(std::string id, DesignParameter* Lx, DesignParameter* Lyi, DesignParameter* Lyo)
+    : BasicSpatialElement(std::move(id), "BodyHullElement"),
       Lx_(Lx),
       Lyi_(Lyi),
       Lyo_(Lyo) {}
 
-std::unique_ptr<SpatialElement> BodyElement::clone() const {
-    return std::make_unique<BodyElement>(*this);
+std::unique_ptr<SpatialElement> BodyHullElement::clone() const {
+    return std::make_unique<BodyHullElement>(*this);
 }
 
-void BodyElement::registerParameters(ParameterRegistry&) {
+void BodyHullElement::registerParameters(ParameterRegistry&) {
     Lx_->addConsumer(id_);
     Lyi_->addConsumer(id_);
     Lyo_->addConsumer(id_);
 }
 
-void BodyElement::rebindParameters(ParameterRegistry& registry) {
+void BodyHullElement::rebindParameters(ParameterRegistry& registry) {
     Lx_ = requireMutableParameter(registry, Lx_->stable_id());
     Lyi_ = requireMutableParameter(registry, Lyi_->stable_id());
     Lyo_ = requireMutableParameter(registry, Lyo_->stable_id());
 }
 
-void BodyElement::registerConstraints(ConstraintRegistry& registry) const {
+void BodyHullElement::registerConstraints(ConstraintRegistry& registry) const {
     const std::string Lx_id = Lx_->stable_id();
     const std::string Lyi_id = Lyi_->stable_id();
     const std::string Lyo_id = Lyo_->stable_id();
@@ -218,7 +251,7 @@ void BodyElement::registerConstraints(ConstraintRegistry& registry) const {
     });
 }
 
-void BodyElement::updateFromParameters() {
+void BodyHullElement::updateFromParameters() {
     const double half_x = std::max(kBodyHalfSizeBase, kBodyHalfSizeScale * Lx_->value + kBodyHalfSizeOffset);
     const double half_y = std::max(kBodyHalfSizeBase, kBodyHalfSizeScale * Lyi_->value + kBodyHalfSizeOffset);
     constexpr double half_z = kBodyHalfHeight;
@@ -236,6 +269,29 @@ void BodyElement::updateFromParameters() {
     Eigen::Isometry3d bottom = Eigen::Isometry3d::Identity();
     bottom.translation() = Eigen::Vector3d(0.0, 0.0, -half_z);
     setAnchor("bottom", bottom);
+}
+
+BodyFrameElement::BodyFrameElement(std::string id)
+    : BasicSpatialElement(std::move(id), "BodyFrameElement") {}
+
+std::unique_ptr<SpatialElement> BodyFrameElement::clone() const {
+    return std::make_unique<BodyFrameElement>(*this);
+}
+
+void BodyFrameElement::registerParameters(ParameterRegistry&) {}
+void BodyFrameElement::rebindParameters(ParameterRegistry&) {}
+void BodyFrameElement::registerConstraints(ConstraintRegistry&) const {}
+
+void BodyFrameElement::updateFromParameters() {
+    mass_ = 0.0;
+    local_com_.setZero();
+    local_inertia_.setZero();
+    GeometryPrimitive hub = GeometryPrimitive::makeCylinder(kBodyFrameHubRadius, kBodyFrameHubHeight, 0.0);
+    hub.local_pose.linear() =
+        Eigen::AngleAxisd(3.14159265358979323846 / 2.0, Eigen::Vector3d::UnitX()).toRotationMatrix();
+    primitives_ = {hub};
+    anchors_.clear();
+    setAnchor("center", Eigen::Isometry3d::Identity());
 }
 
 BatteryElement::BatteryElement(
@@ -298,6 +354,123 @@ void BatteryElement::updateFromParameters() {
 
 double BatteryElement::batteryMass() const {
     return m_bat_->value;
+}
+
+LocalAABB BatteryElement::localEnvelope() const {
+    const double normalized_thrust = thrust_max_->value / kBaselineMotorTmax;
+    const double half_x = 0.5 * (kBatteryLengthBase + kBatteryLengthScale * normalized_thrust) + kBatteryBoxPadding;
+    const double half_y = 0.5 * (kBatteryWidthBase  + kBatteryWidthScale  * propeller_diameter_->value) + kBatteryBoxPadding;
+    const double half_z = kBatteryHalfHeight + kBatteryBoxPadding;
+    return {
+        Eigen::Vector3d{-half_x, -half_y, -half_z},
+        Eigen::Vector3d{+half_x, +half_y, +half_z}
+    };
+}
+
+CabinEnvelopeElement::CabinEnvelopeElement(std::string id)
+    : BasicSpatialElement(std::move(id), "CabinEnvelopeElement") {}
+
+std::unique_ptr<SpatialElement> CabinEnvelopeElement::clone() const {
+    return std::make_unique<CabinEnvelopeElement>(*this);
+}
+
+void CabinEnvelopeElement::registerParameters(ParameterRegistry&) {}
+void CabinEnvelopeElement::rebindParameters(ParameterRegistry&) {}
+void CabinEnvelopeElement::registerConstraints(ConstraintRegistry&) const {}
+
+void CabinEnvelopeElement::updateFromParameters() {
+    mass_ = 0.0;
+    local_com_.setZero();
+    local_inertia_.setZero();
+    primitives_ = {GeometryPrimitive::makeBox({kCabinHalfX, kCabinHalfY, kCabinHalfZ}, 0.0)};
+    anchors_.clear();
+    setAnchor("center", Eigen::Isometry3d::Identity());
+}
+
+LocalAABB CabinEnvelopeElement::localEnvelope() const {
+    return {
+        Eigen::Vector3d{-kCabinHalfX, -kCabinHalfY, -kCabinHalfZ},
+        Eigen::Vector3d{+kCabinHalfX, +kCabinHalfY, +kCabinHalfZ}
+    };
+}
+
+// OccupantEnvelopeElement — minimum seated-passenger space (4 pax, 2×2 layout)
+constexpr double kOccupantHalfX = 0.55;  // 1.10m wide (2 shoulder widths)
+constexpr double kOccupantHalfY = 0.45;  // 0.90m deep (seat depth + legroom)
+constexpr double kOccupantHalfZ = 0.60;  // 1.20m tall (seated head height)
+
+OccupantEnvelopeElement::OccupantEnvelopeElement(std::string id)
+    : BasicSpatialElement(std::move(id), "OccupantEnvelopeElement") {}
+
+std::unique_ptr<SpatialElement> OccupantEnvelopeElement::clone() const {
+    return std::make_unique<OccupantEnvelopeElement>(*this);
+}
+
+void OccupantEnvelopeElement::registerParameters(ParameterRegistry&) {}
+void OccupantEnvelopeElement::rebindParameters(ParameterRegistry&) {}
+void OccupantEnvelopeElement::registerConstraints(ConstraintRegistry&) const {}
+
+void OccupantEnvelopeElement::updateFromParameters() {
+    mass_ = 0.0;
+    local_com_.setZero();
+    local_inertia_.setZero();
+    primitives_ = {GeometryPrimitive::makeBox({kOccupantHalfX, kOccupantHalfY, kOccupantHalfZ}, 0.0)};
+    anchors_.clear();
+    setAnchor("center", Eigen::Isometry3d::Identity());
+}
+
+LocalAABB OccupantEnvelopeElement::localEnvelope() const {
+    return {
+        Eigen::Vector3d{-kOccupantHalfX, -kOccupantHalfY, -kOccupantHalfZ},
+        Eigen::Vector3d{+kOccupantHalfX, +kOccupantHalfY, +kOccupantHalfZ}
+    };
+}
+
+// Rotor keep-out cylinder dimensions.
+// r_keepout = r_prop + kKeepOutRadialMargin accounts for manufacturing tolerance (~20 mm),
+// worst-case arm tip deflection allowance (~30 mm), and minimum safety clearance (~50 mm).
+// kKeepOutHalfZ covers blade-root flapping, hub protrusion, and dynamic in-plane motion.
+constexpr double kKeepOutRadialMargin = 0.10;  // safety margin added to propeller radius [m]
+constexpr double kKeepOutHalfZ        = 0.20;  // half-height of keep-out cylinder [m]
+
+KeepOutZoneElement::KeepOutZoneElement(std::string id, DesignParameter* propeller_diameter)
+    : BasicSpatialElement(std::move(id), "KeepOutZoneElement"),
+      propeller_diameter_(propeller_diameter) {}
+
+std::unique_ptr<SpatialElement> KeepOutZoneElement::clone() const {
+    return std::make_unique<KeepOutZoneElement>(*this);
+}
+
+void KeepOutZoneElement::registerParameters(ParameterRegistry&) {
+    propeller_diameter_->addConsumer(id_);
+}
+
+void KeepOutZoneElement::rebindParameters(ParameterRegistry& registry) {
+    propeller_diameter_ = requireMutableParameter(registry, propeller_diameter_->stable_id());
+}
+
+void KeepOutZoneElement::registerConstraints(ConstraintRegistry&) const {}
+
+void KeepOutZoneElement::updateFromParameters() {
+    mass_ = 0.0;
+    local_com_.setZero();
+    local_inertia_.setZero();
+    r_keepout_ = 0.5 * propeller_diameter_->value + kKeepOutRadialMargin;
+    // Unit cylinder axis is along local Y; rotate 90° around X so axis aligns with local Z (= world Z = vertical).
+    // Same correction applied in MotorElement and BodyFrameElement.
+    GeometryPrimitive cyl = GeometryPrimitive::makeCylinder(r_keepout_, 2.0 * kKeepOutHalfZ, 0.0);
+    cyl.local_pose.linear() =
+        Eigen::AngleAxisd(3.14159265358979323846 / 2.0, Eigen::Vector3d::UnitX()).toRotationMatrix();
+    primitives_ = {cyl};
+    anchors_.clear();
+    setAnchor("center", Eigen::Isometry3d::Identity());
+}
+
+LocalAABB KeepOutZoneElement::localEnvelope() const {
+    return {
+        Eigen::Vector3d{-r_keepout_, -r_keepout_, -kKeepOutHalfZ},
+        Eigen::Vector3d{+r_keepout_, +r_keepout_, +kKeepOutHalfZ}
+    };
 }
 
 ArmElement::ArmElement(
@@ -465,11 +638,13 @@ void MotorElement::registerConstraints(ConstraintRegistry& registry) const {
 }
 
 void MotorElement::updateFromParameters() {
-    const double radius = kMotorRadiusBase + kMotorRadiusScale * (thrust_max_->value / kBaselineMotorTmax);
+    const double normalized = thrust_max_->value / kBaselineMotorTmax;
+    const double radius = kMotorRadiusBase + kMotorRadiusScale * normalized;
+    const double height = kMotorHeight * std::pow(normalized, 1.0 / 3.0);
     mass_ = motorMass(thrust_max_->value);
     local_com_.setZero();
     local_inertia_.setZero();
-    GeometryPrimitive motor_cyl = GeometryPrimitive::makeCylinder(radius, kMotorHeight, kMotorCylinderPadding);
+    GeometryPrimitive motor_cyl = GeometryPrimitive::makeCylinder(radius, height, kMotorCylinderPadding);
     motor_cyl.local_pose.linear() =
         Eigen::AngleAxisd(3.14159265358979323846 / 2.0, Eigen::Vector3d::UnitX()).toRotationMatrix();
     primitives_ = {motor_cyl};
@@ -522,11 +697,31 @@ void RotorElement::registerConstraints(ConstraintRegistry& registry) const {
     });
 }
 
+void RotorElement::registerThrustMax(DesignParameter* thrust_max) {
+    thrust_max_ = thrust_max;
+}
+
 void RotorElement::updateFromParameters() {
     mass_ = 0.0;
     local_com_.setZero();
     local_inertia_.setZero();
-    primitives_ = {GeometryPrimitive::makeDisk(0.5 * propeller_diameter_->value, 0.01)};
+
+    double disk_radius;
+    if (thrust_max_ != nullptr) {
+        // Mach-tip blade-loading formula: T = C_T * rho * pi * R^2 * V_tip^2
+        // d_prop stays frozen at 0.40 m for cT yaw torque; visual disk uses T_max.
+        constexpr double kCT      = 0.02;
+        constexpr double kRho     = 1.225;
+        constexpr double kPi      = 3.14159265358979323846;
+        constexpr double kMtip    = 0.65;
+        constexpr double kVsound  = 340.0;
+        const double Vtip2 = (kMtip * kVsound) * (kMtip * kVsound);
+        disk_radius = std::sqrt(thrust_max_->value / (kCT * kRho * kPi * Vtip2));
+    } else {
+        disk_radius = 0.5 * propeller_diameter_->value;
+    }
+
+    primitives_ = {GeometryPrimitive::makeDisk(disk_radius, 0.01)};
     anchors_.clear();
     setAnchor("axis", Eigen::Isometry3d::Identity());
     setAnchor("center", Eigen::Isometry3d::Identity());

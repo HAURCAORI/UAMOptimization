@@ -83,12 +83,24 @@ struct Stage1Metrics {
     double bat_energy_reserve_fraction = 0.0;  // (E_avail - E_req) / E_avail; ≥0 = feasible
     double bat_c_rate = 0.0;                   // peak pack current / rated capacity [1/h]
     double bat_mass_fraction = 0.0;            // m_bat / m_total ∈ [0,1]
+    double bat_achievable_endurance_nom_min = 0.0;  // E_avail / (P_nom + P_aux) × 60 [min]; actual flyable time at nominal hover
 
     // Phase 3: Structural network (multi-load-case von Mises analysis — A/C in spec)
     double struct_net_min_safety_factor = 0.0;    // worst SF over all members × load cases
     double struct_net_max_tip_deflection_m = 0.0; // worst arm tip deflection [m]
     double struct_net_max_tip_rotation_rad = 0.0; // worst arm tip rotation [rad]
     double struct_net_max_sigma_vm_pa = 0.0;      // worst von Mises stress [Pa]
+
+    // Phase 6: Packaging (ArchitecturePackagingEvaluator — Step 2)
+    double pkg_rotor_clearance_m = 0.0;  // minimum inter-rotor disk clearance [m]; < 0 = overlap
+
+    // Phase 7: Placement constraints (Step 3)
+    double pkg_payload_containment_m = 0.0;       // > 0 = payload protrudes outside cabin [m]
+    double pkg_battery_containment_m = 0.0;       // > 0 = battery protrudes outside cabin [m]
+    double pkg_battery_payload_overlap_m = 0.0;   // > 0 = battery–payload penetration [m]
+    double pkg_occupant_containment_m = 0.0;      // > 0 = occupant envelope protrudes outside cabin [m]
+    double cg_y_offset_m = 0.0;                   // |lateral CG offset| from centerline [m]
+    double pkg_rotor_keepout_m = 0.0;             // > 0 = occupant/payload/battery intrudes into rotor keep-out cylinder [m]
 };
 
 struct EvaluationResult {

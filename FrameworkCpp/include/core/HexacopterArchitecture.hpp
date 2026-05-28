@@ -56,7 +56,10 @@ public:
     [[nodiscard]] double cT() const;
     [[nodiscard]] double propellerDiameter() const;
     [[nodiscard]] double payloadMass() const;
-    [[nodiscard]] double batteryMass() const;  // Phase 2: battery pack mass [kg]
+    [[nodiscard]] double batteryMass() const;    // Phase 2: battery pack mass [kg]
+    [[nodiscard]] double batteryZOffset() const; // Task 3: battery z placement DOF [m]
+    [[nodiscard]] double payloadXOffset() const; // Task 3: payload x placement DOF [m]
+    [[nodiscard]] double payloadYOffset() const; // Task 3: payload y placement DOF [m]
     [[nodiscard]] bool useVehicleModel() const;
     [[nodiscard]] double nominalMass() const;
     [[nodiscard]] double gravity() const;
@@ -94,7 +97,10 @@ private:
     DesignParameter* payload_parameter_ = nullptr;
     DesignParameter* r_o_parameter_ = nullptr;
     DesignParameter* t_wall_parameter_ = nullptr;
-    DesignParameter* mbat_parameter_ = nullptr;  // Phase 2: battery pack mass
+    DesignParameter* mbat_parameter_ = nullptr;     // Phase 2: battery pack mass
+    DesignParameter* zbatoff_parameter_ = nullptr;  // Task 3: battery z placement DOF
+    DesignParameter* xpayload_parameter_ = nullptr; // Task 3: payload x placement DOF
+    DesignParameter* ypayload_parameter_ = nullptr; // Task 3: payload y placement DOF
 };
 
 }  // namespace hexaarch::core
