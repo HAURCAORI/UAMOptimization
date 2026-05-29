@@ -33,6 +33,11 @@ void ViewerCamera::reset(const Eigen::Vector3d& target, const double distance) {
     pitch_radians_ = -0.45;
 }
 
+void ViewerCamera::snapTo(const double yaw_radians, const double pitch_radians) {
+    yaw_radians_   = yaw_radians;
+    pitch_radians_ = std::clamp(pitch_radians, -kHalfPi + 1e-3, kHalfPi - 1e-3);
+}
+
 void ViewerCamera::orbit(const double delta_yaw_radians, const double delta_pitch_radians) {
     yaw_radians_ += delta_yaw_radians;
     pitch_radians_ = std::clamp(pitch_radians_ + delta_pitch_radians, -kHalfPi + 1e-3, kHalfPi - 1e-3);

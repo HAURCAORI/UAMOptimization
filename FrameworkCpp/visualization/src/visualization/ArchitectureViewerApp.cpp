@@ -888,7 +888,10 @@ VkShaderModule createShaderModule(const VkDevice device, const std::vector<char>
 
 struct ArchitectureViewerApp::Impl {
     explicit Impl(ArchitectureViewerApp::Config config_in)
-        : config(std::move(config_in)) {}
+        : config(std::move(config_in)) {
+        constexpr std::string_view kDefaultPath = "screenshot.png";
+        std::copy(kDefaultPath.begin(), kDefaultPath.end(), capture_path_buf.begin());
+    }
 
     ArchitectureViewerApp::Config config;
     ViewerCamera camera;
@@ -975,6 +978,13 @@ struct ArchitectureViewerApp::Impl {
     std::optional<core::HexacopterArchitecture> owned_arch;
     std::optional<evaluation::EvaluationResult> pending_result;
     std::optional<evaluation::EvaluationResult> owned_result;
+
+    // Screenshot capture state.
+    bool capture_requested = false;
+    bool capture_in_progress = false;
+    std::string capture_status_message;
+    std::uint32_t last_image_index = 0;
+    std::array<char, 512> capture_path_buf{};
 
     [[nodiscard]] fs::path compiledShaderPath(const std::string_view source_name) const {
         return shader_root / "compiled" / (std::string(source_name) + ".spv");
@@ -2183,7 +2193,9 @@ void recordCommandBuffer(
     }
 
 #ifdef HEXAARCH_HAS_IMGUI
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), command_buffer);
+    if (!impl.capture_in_progress) {
+        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), command_buffer);
+    }
 #endif
 
     vkCmdEndRenderPass(command_buffer);
@@ -2323,6 +2335,7 @@ void drawFrame(ArchitectureViewerApp::Impl& impl) {
     present_info.pSwapchains = &impl.swapchain;
     present_info.pImageIndices = &image_index;
 
+    impl.last_image_index = image_index;
     result = vkQueuePresentKHR(impl.present_queue, &present_info);
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || impl.framebuffer_resized) {
         recreateSwapchain(impl);
@@ -2556,11 +2569,21 @@ void createLogicalDevice(ArchitectureViewerApp::Impl& impl) {
 }
 
 void initializeSceneCamera(ArchitectureViewerApp::Impl& impl) {
-    const Eigen::Vector3d center = sceneCenter(impl.instances);
-    const double radius = sceneRadius(impl.instances, center);
+    // Measure radius from origin using vehicle elements only — exclude reference axes, grid,
+    // and the human-reference phantom (which sits 9 m away and would push the camera too far).
+    double radius = 1.0;
+    for (const auto& inst : impl.instances) {
+        if (inst.source_element_type == "ReferenceAxis"
+         || inst.source_element_type == "ReferenceGrid"
+         || inst.source_element_type == "HumanReference") {
+            continue;
+        }
+        const double dist = inst.world_transform.translation().norm();
+        radius = std::max(radius, dist + primitiveBoundingRadius(inst));
+    }
     impl.camera.setViewport(static_cast<float>(impl.swapchain_extent.width), static_cast<float>(impl.swapchain_extent.height));
     impl.camera.setPerspective(60.0f * 3.14159265358979323846f / 180.0f, 0.1f, 1000.0f);
-    impl.camera.reset(center, std::max(radius * 2.5, 6.0));
+    impl.camera.reset(Eigen::Vector3d::Zero(), std::max(radius * 2.5, 6.0));
 }
 
 void initViewerRuntime(ArchitectureViewerApp::Impl& impl) {
@@ -2594,6 +2617,8 @@ void applyVisibilityFlags(ArchitectureViewerApp::Impl& impl) {
             instance.visible = impl.ui_show_axes;
         } else if (instance.source_element_type == "ReferenceGrid") {
             instance.visible = impl.ui_show_grid;
+        } else if (instance.source_element_type == "HumanReference") {
+            instance.visible = false;  // glTF mannequin renders separately; phantom never shown
         } else {
             const auto it = impl.element_visibility.find(instance.source_element_id);
             instance.visible = (it == impl.element_visibility.end()) || it->second;
@@ -2693,6 +2718,142 @@ void cleanupImGui(ArchitectureViewerApp::Impl& impl) {
 #endif
 }
 
+#if defined(_WIN32)
+bool saveImageAsPng(
+    const fs::path& path,
+    const std::uint8_t* bgra_pixels,
+    const std::uint32_t width,
+    const std::uint32_t height) {
+    if (path.has_parent_path()) {
+        std::error_code ec;
+        fs::create_directories(path.parent_path(), ec);
+    }
+
+    const HRESULT co_init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (FAILED(co_init) && co_init != RPC_E_CHANGED_MODE) { return false; }
+
+    IWICImagingFactory* factory = nullptr;
+    if (FAILED(CoCreateInstance(
+            CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory)))) {
+        return false;
+    }
+
+    IWICStream* stream = nullptr;
+    IWICBitmapEncoder* encoder = nullptr;
+    IWICBitmapFrameEncode* frame = nullptr;
+    IPropertyBag2* props = nullptr;
+
+    HRESULT hr = factory->CreateStream(&stream);
+    if (SUCCEEDED(hr)) { hr = stream->InitializeFromFilename(path.wstring().c_str(), GENERIC_WRITE); }
+    if (SUCCEEDED(hr)) { hr = factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder); }
+    if (SUCCEEDED(hr)) { hr = encoder->Initialize(stream, WICBitmapEncoderNoCache); }
+    if (SUCCEEDED(hr)) { hr = encoder->CreateNewFrame(&frame, &props); }
+    if (SUCCEEDED(hr)) { hr = frame->Initialize(props); }
+    if (SUCCEEDED(hr)) { hr = frame->SetSize(width, height); }
+    WICPixelFormatGUID fmt = GUID_WICPixelFormat32bppBGRA;
+    if (SUCCEEDED(hr)) { hr = frame->SetPixelFormat(&fmt); }
+    if (SUCCEEDED(hr)) {
+        const UINT stride = width * 4U;
+        hr = frame->WritePixels(height, stride, stride * height,
+            const_cast<BYTE*>(bgra_pixels));
+    }
+    if (SUCCEEDED(hr)) { hr = frame->Commit(); }
+    if (SUCCEEDED(hr)) { hr = encoder->Commit(); }
+
+    if (props)   { props->Release(); }
+    if (frame)   { frame->Release(); }
+    if (encoder) { encoder->Release(); }
+    if (stream)  { stream->Release(); }
+    factory->Release();
+    return SUCCEEDED(hr);
+}
+#endif
+
+void captureScreenshot(ArchitectureViewerApp::Impl& impl) {
+    if (impl.swapchain_images.empty()) {
+        impl.capture_status_message = "No swapchain image.";
+        return;
+    }
+
+    vkDeviceWaitIdle(impl.device);
+
+    const std::uint32_t width  = impl.swapchain_extent.width;
+    const std::uint32_t height = impl.swapchain_extent.height;
+    const VkDeviceSize  image_size = static_cast<VkDeviceSize>(width) * height * 4U;
+
+    BufferResource staging;
+    try {
+        createBuffer(impl.physical_device, impl.device, image_size,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            staging);
+    } catch (...) {
+        impl.capture_status_message = "Failed to allocate capture buffer.";
+        return;
+    }
+
+    VkImage src_image = impl.swapchain_images[impl.last_image_index];
+    const VkCommandBuffer cmd = beginSingleTimeCommands(impl.device, impl.transfer_pool);
+
+    {
+        VkImageMemoryBarrier b{};
+        b.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout        = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        b.newLayout        = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image            = src_image;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        b.srcAccessMask    = VK_ACCESS_MEMORY_READ_BIT;
+        b.dstAccessMask    = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &b);
+    }
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent      = {width, height, 1};
+    vkCmdCopyImageToBuffer(cmd, src_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        staging.buffer, 1, &region);
+
+    {
+        VkImageMemoryBarrier b{};
+        b.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        b.newLayout        = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image            = src_image;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        b.srcAccessMask    = VK_ACCESS_TRANSFER_READ_BIT;
+        b.dstAccessMask    = VK_ACCESS_MEMORY_READ_BIT;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &b);
+    }
+
+    endSingleTimeCommands(impl.device, impl.graphics_queue, impl.transfer_pool, cmd);
+
+    void* mapped = nullptr;
+    vkMapMemory(impl.device, staging.memory, 0, image_size, 0, &mapped);
+    const auto* pixels = static_cast<const std::uint8_t*>(mapped);
+
+    // Raw BGRA bytes from swapchain — saveImageAsPng uses GUID_WICPixelFormat32bppBGRA
+    // so no channel swap is needed.
+    const fs::path save_path(impl.capture_path_buf.data());
+    bool ok = false;
+#if defined(_WIN32)
+    ok = saveImageAsPng(save_path, pixels, width, height);
+#endif
+    vkUnmapMemory(impl.device, staging.memory);
+    destroyBuffer(impl.device, staging);
+
+    impl.capture_status_message = ok
+        ? "Saved: " + save_path.filename().string()
+        : "Save failed: " + save_path.string();
+}
+
 void renderUiPanel(ArchitectureViewerApp::Impl& impl) {
 #ifdef HEXAARCH_HAS_IMGUI
     const float eff_scale = impl.ui_dpi_scale * impl.ui_scale;
@@ -2760,7 +2921,7 @@ void renderElementListPanel(ArchitectureViewerApp::Impl& impl) {
             for (const auto& ae : assembled) {
                 if (ae.element == nullptr) { continue; }
                 const std::string& etype = ae.element->type();
-                if (etype == "ReferenceAxis" || etype == "ReferenceGrid") { continue; }
+                if (etype == "ReferenceAxis" || etype == "ReferenceGrid" || etype == "HumanReference") { continue; }
 
                 const std::string& eid = ae.element->id();
                 const bool has_suffix = etype.size() > 7 &&
@@ -2896,6 +3057,62 @@ void renderResultPanel(ArchitectureViewerApp::Impl& impl) {
 #endif
 }
 
+void renderRenderPanel(ArchitectureViewerApp::Impl& impl) {
+#ifdef HEXAARCH_HAS_IMGUI
+    const float eff_scale = impl.ui_dpi_scale * impl.ui_scale;
+    const float panel_w   = std::round(260.0f * eff_scale);
+    const float W         = static_cast<float>(impl.swapchain_extent.width);
+
+    ImGui::SetNextWindowPos(
+        ImVec2(W - panel_w - 10.0f, std::round(165.0f * eff_scale)),
+        ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(panel_w, 0.0f), ImGuiCond_Always);
+    if (ImGui::Begin("Render", nullptr, ImGuiWindowFlags_NoResize)) {
+        // --- Camera direction presets ----------------------------------------
+        ImGui::Text("View direction:");
+        constexpr double kHalfPi = 1.5707963267948966;
+        constexpr double kPi     = 3.14159265358979324;
+        const float btn_w = std::round(36.0f * eff_scale);
+
+        const auto snapOrigin = [&](double yaw, double pitch) {
+            impl.camera.pan(-impl.camera.target());  // move target to (0,0,0)
+            impl.camera.snapTo(yaw, pitch);
+        };
+        if (ImGui::Button("+X", ImVec2(btn_w, 0))) { snapOrigin(kPi,         0.0); }
+        ImGui::SameLine();
+        if (ImGui::Button("-X", ImVec2(btn_w, 0))) { snapOrigin(0.0,         0.0); }
+        ImGui::SameLine();
+        if (ImGui::Button("+Y", ImVec2(btn_w, 0))) { snapOrigin(-kHalfPi,   0.0); }
+        ImGui::SameLine();
+        if (ImGui::Button("-Y", ImVec2(btn_w, 0))) { snapOrigin(kHalfPi,    0.0); }
+        ImGui::SameLine();
+        if (ImGui::Button("+Z", ImVec2(btn_w, 0))) { snapOrigin(kHalfPi,   -(kHalfPi - 0.001)); }
+        ImGui::SameLine();
+        if (ImGui::Button("-Z", ImVec2(btn_w, 0))) { snapOrigin(kHalfPi,     kHalfPi - 0.001); }
+
+        if (ImGui::Button("Perspective", ImVec2(-1, 0))) { snapOrigin(0.75, -0.45); }
+
+        ImGui::Separator();
+
+        // --- Image export ----------------------------------------------------
+        ImGui::Text("Export image:");
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::InputText("##cappath", impl.capture_path_buf.data(), impl.capture_path_buf.size());
+
+        if (ImGui::Button("Capture PNG", ImVec2(-1, 0))) {
+            impl.capture_requested = true;
+            impl.capture_status_message.clear();
+        }
+        if (!impl.capture_status_message.empty()) {
+            ImGui::TextWrapped("%s", impl.capture_status_message.c_str());
+        }
+    }
+    ImGui::End();
+#else
+    (void)impl;
+#endif
+}
+
 void renderLabels(ArchitectureViewerApp::Impl& impl) {
 #ifdef HEXAARCH_HAS_IMGUI
     if (!impl.ui_show_labels) { return; }
@@ -2993,10 +3210,25 @@ void runViewerLoop(ArchitectureViewerApp::Impl& impl) {
         renderUiPanel(impl);
         renderElementListPanel(impl);
         renderResultPanel(impl);
+        renderRenderPanel(impl);
         renderLabels(impl);
         ImGui::Render();
 #endif
         drawFrame(impl);
+        if (impl.capture_requested) {
+#ifdef HEXAARCH_HAS_IMGUI
+            // Render one extra frame with no ImGui draw data so the PNG is GUI-free.
+            ImGui_ImplVulkan_NewFrame();
+            ImGui_ImplGlfw_NewFrame();
+            ImGui::NewFrame();
+            ImGui::Render();
+            impl.capture_in_progress = true;
+            drawFrame(impl);
+            impl.capture_in_progress = false;
+#endif
+            captureScreenshot(impl);
+            impl.capture_requested = false;
+        }
     }
     vkDeviceWaitIdle(impl.device);
 }

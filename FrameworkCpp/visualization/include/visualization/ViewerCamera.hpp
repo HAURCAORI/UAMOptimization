@@ -12,6 +12,7 @@ public:
     void setViewport(float width, float height);
     void setPerspective(float vertical_fov_radians, float near_plane, float far_plane);
     void reset(const Eigen::Vector3d& target, double distance);
+    void snapTo(double yaw_radians, double pitch_radians);
     void orbit(double delta_yaw_radians, double delta_pitch_radians);
     void pan(const Eigen::Vector3d& delta_world);
     void zoom(double delta_distance);
