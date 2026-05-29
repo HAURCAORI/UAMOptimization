@@ -8,6 +8,8 @@
 #include <vector>
 
 #include "evaluation/ObjectiveAggregator.hpp"
+#include "mission/MissionEvaluator.hpp"
+#include "mission/MissionProfile.hpp"
 #include "physics/ArchitecturePackagingEvaluator.hpp"
 #include "physics/AttainableControlSetAnalyzer.hpp"
 #include "physics/BatteryEvaluator.hpp"
@@ -156,11 +158,45 @@ EvaluationResult Stage1Evaluator::evaluate(
             context);
 
         const physics::BatteryEvaluator bat_evaluator;
-        result.battery = bat_evaluator.evaluate(
-            result.powertrain,
-            architecture.batteryMass(),
-            result.physical_model.mass_properties.mass,
-            context);
+        if (context.mission_profile && !context.mission_profile->empty()) {
+            constexpr double kPi = 3.14159265358979323846;
+            const double r_eff =
+                std::max(result.physical_model.structural.max_arm_length * 0.5, 0.1);
+            const double single_disk_area = kPi * r_eff * r_eff;
+
+            const mission::MissionEvaluator mission_eval;
+            const mission::MissionResult mission_result = mission_eval.evaluate(
+                *context.mission_profile,
+                result.powertrain,
+                result.physical_model,
+                single_disk_area,
+                context);
+
+            result.battery = bat_evaluator.evaluateWithMission(
+                result.powertrain,
+                mission_result,
+                architecture.batteryMass(),
+                result.physical_model.mass_properties.mass,
+                context);
+
+            result.stage1.mission_active = true;
+            result.stage1.mission_total_time_s        = mission_result.total_time_s;
+            result.stage1.mission_total_distance_m    = mission_result.total_distance_m;
+            result.stage1.mission_cruise_distance_m   = mission_result.cruise_distance_m;
+            result.stage1.mission_total_energy_wh     = mission_result.total_energy_wh;
+            result.stage1.mission_energy_with_aux_wh  = mission_result.total_energy_with_aux_wh;
+            result.stage1.mission_peak_power_w        = mission_result.peak_power_w;
+            result.stage1.mission_hover_energy_wh     = mission_result.hover_energy_wh;
+            result.stage1.mission_cruise_energy_wh    = mission_result.cruise_energy_wh;
+            result.stage1.mission_energy_reserve_fraction =
+                result.battery.energy_reserve_fraction;
+        } else {
+            result.battery = bat_evaluator.evaluate(
+                result.powertrain,
+                architecture.batteryMass(),
+                result.physical_model.mass_properties.mass,
+                context);
+        }
 
         result.stage1.pt_total_power_nominal_w  = result.powertrain.total_power_nominal_w;
         result.stage1.pt_total_power_faulted_w  = result.powertrain.total_power_faulted_w;
@@ -208,6 +244,7 @@ EvaluationResult Stage1Evaluator::evaluate(
     result.stage1.pkg_payload_containment_m     = result.physical_model.packaging.payload_containment_violation;
     result.stage1.pkg_battery_containment_m     = result.physical_model.packaging.battery_containment_violation;
     result.stage1.pkg_battery_payload_overlap_m = result.physical_model.packaging.battery_payload_overlap;
+    result.stage1.pkg_payload_internal_overlap_m = result.physical_model.packaging.payload_internal_overlap;
     result.stage1.pkg_occupant_containment_m    = result.physical_model.packaging.occupant_containment_violation;
     result.stage1.cg_y_offset_m                 = std::abs(result.physical_model.mass_properties.center_of_mass.y());
     result.stage1.pkg_rotor_keepout_m           = result.physical_model.packaging.rotor_keepout_intrusion_m;

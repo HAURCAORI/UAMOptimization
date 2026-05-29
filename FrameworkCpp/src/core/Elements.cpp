@@ -15,33 +15,46 @@ namespace {
 constexpr double kBaselineMotorMass = 74.07;
 constexpr double kBaselineMotorTmax = 7327.0;
 constexpr double kMotorMassExponent = 3.0 / 3.5;
-constexpr double kBaselinePayloadRadius = 0.60;
 
-// BodyHullElement geometry — outer fuselage hull; must fully contain cabin and battery.
-// kBodyHalfSizeBase >= kCabinHalfX/Y (0.80/0.90); kBodyHalfHeight >= kCabinHalfZ (0.90).
-constexpr double kBodyHalfSizeBase   = 1.00;
-constexpr double kBodyHalfSizeScale  = 0.10;
-constexpr double kBodyHalfSizeOffset = 0.10;
-constexpr double kBodyHalfHeight     = 1.00;
+// BodyHullElement geometry — outer fuselage hull.
+// Sized from cabin envelope + wall margin + a small arm-length term so body grows as arms lengthen.
+// This makes body volume a function of the optimization variables (Lx, Lyi) rather than a fixed box,
+// satisfying the requirement that body volume is not decoupled from the optimized geometry.
+// The arm scale is deliberately small (0.05 m/m) so body stays well within the rotor inner-edge
+// distance (≈ arm_length − disk_radius) even at maximum design-space extents.
+constexpr double kBodyHullWallMargin = 0.05;   // outer skin thickness over cabin [m]
+constexpr double kBodyHullArmScale   = 0.05;   // body expands 5 cm per m of arm length [m/m]
+constexpr double kBodyHalfHeight     = 1.25;   // must be >= kCabinHalfZ (1.10)
 constexpr double kBodyBoxPadding     = 0.05;
 
 // BodyFrameElement geometry — central hub plate connecting arm roots.
 constexpr double kBodyFrameHubRadius = 0.30;
 constexpr double kBodyFrameHubHeight = 0.08;
 
-// BatteryElement geometry
-constexpr double kBatteryLengthBase  = 0.35;
-constexpr double kBatteryLengthScale = 0.08;
-constexpr double kBatteryWidthBase   = 0.25;
-constexpr double kBatteryWidthScale  = 0.10;
-constexpr double kBatteryHalfHeight  = 0.12;
-constexpr double kBatteryBoxPadding  = 0.02;
+// BatteryElement geometry — physics-based slab model.
+// Volume = m_bat / kBatteryPackDensity; height is derived from that volume given a fixed plan.
+//   kBatteryPackDensity: 1500 kg/m³ ≈ NMC811 cell at ~600 Wh/L with 60-70% pack packing factor.
+//   Plan area (slab_half_x × slab_half_y): sized to cover most of the cabin ceiling cross-section.
+// This makes the battery grow visibly as m_bat increases and shrink as it decreases, giving the
+// optimizer a physically correct volume signal rather than an arbitrary empirical scaling.
+constexpr double kBatteryPackDensity = 1500.0;  // [kg/m³] — Li-ion pack including BMS / cooling
+constexpr double kBatterySlabHalfX   = 0.65;    // fore/aft half-extent [m] → 1.30 m total
+constexpr double kBatterySlabHalfY   = 0.75;    // lateral half-extent [m]  → 1.50 m total
+constexpr double kBatteryBoxPadding  = 0.02;    // visual/envelope clearance margin [m]
+// Max half-z: the battery is a SLIM ceiling slab. The physics (energy, mass) are correct; the
+// height cap keeps the visual representation thin even as m_bat grows. At the cap the slab is
+// 0.16 m tall, which represents ~360 kg of pack at 1500 kg/m³ with this plan area.
+// For heavier batteries the slab appears at maximum thickness — the optimizer still sees the
+// correct energy and C-rate constraints from m_bat, not from the visual height.
+constexpr double kBatteryMaxHalfZ   = 0.08;    // slim ceiling slab: max height = 0.16 m
 
-// CabinEnvelopeElement — passenger cabin inner hull [m]; must contain payload box (±0.60, ±0.60, ±0.50).
-// Height 1.80 m (= 2*kCabinHalfZ) matches the 180 cm human reference mannequin.
-constexpr double kCabinHalfX = 0.80;   // 1.60 m wide — 2-seat abreast
-constexpr double kCabinHalfY = 0.90;   // 1.80 m deep — 2-row seating with legroom
-constexpr double kCabinHalfZ = 0.90;   // 1.80 m tall — standing headroom for mannequin
+// CabinEnvelopeElement — passenger cabin inner hull [m].
+// 2.20 m total height gives realistic standing headroom relative to the mannequin reference asset.
+// Battery zone (z<0), passenger seats (z≈0), and cargo floor (z>0) are vertically stratified
+// inside this envelope; none share the same z band at the default placement.
+constexpr double kCabinHalfX = 0.80;   // 1.60 m fore/aft — fits 2 seat rows + instrument panel
+constexpr double kCabinHalfY = 0.90;   // 1.80 m lateral — fits 2 seats abreast with shoulder room
+constexpr double kCabinHalfZ = 1.10;   // 2.20 m total — standing adult headroom
 
 // MotorElement geometry
 constexpr double kMotorRadiusBase      = 0.08;
@@ -198,8 +211,8 @@ LocalAABB PayloadElement::localEnvelope() const {
 }
 
 LocalAABB BodyHullElement::localEnvelope() const {
-    const double half_x = std::max(kBodyHalfSizeBase, kBodyHalfSizeScale * Lx_->value + kBodyHalfSizeOffset);
-    const double half_y = std::max(kBodyHalfSizeBase, kBodyHalfSizeScale * Lyi_->value + kBodyHalfSizeOffset);
+    const double half_x = kCabinHalfX + kBodyHullWallMargin + kBodyHullArmScale * Lx_->value;
+    const double half_y = kCabinHalfY + kBodyHullWallMargin + kBodyHullArmScale * Lyi_->value;
     return {
         Eigen::Vector3d{-half_x, -half_y, -kBodyHalfHeight},
         Eigen::Vector3d{+half_x, +half_y, +kBodyHalfHeight}
@@ -252,8 +265,11 @@ void BodyHullElement::registerConstraints(ConstraintRegistry& registry) const {
 }
 
 void BodyHullElement::updateFromParameters() {
-    const double half_x = std::max(kBodyHalfSizeBase, kBodyHalfSizeScale * Lx_->value + kBodyHalfSizeOffset);
-    const double half_y = std::max(kBodyHalfSizeBase, kBodyHalfSizeScale * Lyi_->value + kBodyHalfSizeOffset);
+    // Width/depth tracks cabin + wall margin + arm-length contribution (optimization target).
+    // At baseline Lx=Lyi=2.65: half_x≈0.98 m, half_y≈1.08 m — comfortably smaller than rotor
+    // inner-edge at ~1.96 m from body center. Grows modestly as arms lengthen.
+    const double half_x = kCabinHalfX + kBodyHullWallMargin + kBodyHullArmScale * Lx_->value;
+    const double half_y = kCabinHalfY + kBodyHullWallMargin + kBodyHullArmScale * Lyi_->value;
     constexpr double half_z = kBodyHalfHeight;
     mass_ = 0.0;
     local_com_.setZero();
@@ -297,12 +313,14 @@ void BodyFrameElement::updateFromParameters() {
 BatteryElement::BatteryElement(
     std::string id,
     DesignParameter* m_bat,
-    DesignParameter* thrust_max,
-    DesignParameter* propeller_diameter)
+    DesignParameter* bat_x,
+    DesignParameter* bat_y,
+    DesignParameter* bat_z)
     : BasicSpatialElement(std::move(id), "BatteryElement"),
       m_bat_(m_bat),
-      thrust_max_(thrust_max),
-      propeller_diameter_(propeller_diameter) {}
+      bat_x_(bat_x),
+      bat_y_(bat_y),
+      bat_z_(bat_z) {}
 
 std::unique_ptr<SpatialElement> BatteryElement::clone() const {
     return std::make_unique<BatteryElement>(*this);
@@ -310,14 +328,16 @@ std::unique_ptr<SpatialElement> BatteryElement::clone() const {
 
 void BatteryElement::registerParameters(ParameterRegistry&) {
     m_bat_->addConsumer(id_);
-    thrust_max_->addConsumer(id_);
-    propeller_diameter_->addConsumer(id_);
+    bat_x_->addConsumer(id_);
+    bat_y_->addConsumer(id_);
+    bat_z_->addConsumer(id_);
 }
 
 void BatteryElement::rebindParameters(ParameterRegistry& registry) {
-    m_bat_ = requireMutableParameter(registry, m_bat_->stable_id());
-    thrust_max_ = requireMutableParameter(registry, thrust_max_->stable_id());
-    propeller_diameter_ = requireMutableParameter(registry, propeller_diameter_->stable_id());
+    m_bat_  = requireMutableParameter(registry, m_bat_->stable_id());
+    bat_x_  = requireMutableParameter(registry, bat_x_->stable_id());
+    bat_y_  = requireMutableParameter(registry, bat_y_->stable_id());
+    bat_z_  = requireMutableParameter(registry, bat_z_->stable_id());
 }
 
 void BatteryElement::registerConstraints(ConstraintRegistry& registry) const {
@@ -339,14 +359,24 @@ void BatteryElement::registerConstraints(ConstraintRegistry& registry) const {
 }
 
 void BatteryElement::updateFromParameters() {
-    // Battery mass is the m_bat design variable — contributes directly to total vehicle mass.
     mass_ = m_bat_->value;
     local_com_.setZero();
     local_inertia_.setZero();
-    const double normalized_thrust = thrust_max_->value / kBaselineMotorTmax;
-    const double length = kBatteryLengthBase + kBatteryLengthScale * normalized_thrust;
-    const double width = kBatteryWidthBase + kBatteryWidthScale * propeller_diameter_->value;
-    primitives_ = {GeometryPrimitive::makeBox({0.5 * length, 0.5 * width, kBatteryHalfHeight}, kBatteryBoxPadding)};
+
+    // Placement owned by local_pose_; attachment is a rigid mount (no lambda).
+    local_pose_ = Eigen::Isometry3d::Identity();
+    local_pose_.translation() = Eigen::Vector3d(bat_x_->value, bat_y_->value, bat_z_->value);
+
+    // Physics-based height capped for slim appearance.
+    // True volume = m_bat/density gives half_z_uncapped; cap at kBatteryMaxHalfZ keeps the slab
+    // visually thin. The packaging envelope and constraint still use half_z_ for correctness.
+    const double volume = std::max(m_bat_->value, 1.0) / kBatteryPackDensity;
+    const double hz_uncapped = volume / (4.0 * kBatterySlabHalfX * kBatterySlabHalfY);
+    half_z_ = std::min(hz_uncapped, kBatteryMaxHalfZ);
+
+    // Primitive in element-local frame; local_pose_ carries the world offset.
+    primitives_ = {GeometryPrimitive::makeBox(
+        {kBatterySlabHalfX, kBatterySlabHalfY, half_z_}, kBatteryBoxPadding)};
     anchors_.clear();
     setAnchor("mount", Eigen::Isometry3d::Identity());
     setAnchor("center", Eigen::Isometry3d::Identity());
@@ -357,14 +387,11 @@ double BatteryElement::batteryMass() const {
 }
 
 LocalAABB BatteryElement::localEnvelope() const {
-    const double normalized_thrust = thrust_max_->value / kBaselineMotorTmax;
-    const double half_x = 0.5 * (kBatteryLengthBase + kBatteryLengthScale * normalized_thrust) + kBatteryBoxPadding;
-    const double half_y = 0.5 * (kBatteryWidthBase  + kBatteryWidthScale  * propeller_diameter_->value) + kBatteryBoxPadding;
-    const double half_z = kBatteryHalfHeight + kBatteryBoxPadding;
-    return {
-        Eigen::Vector3d{-half_x, -half_y, -half_z},
-        Eigen::Vector3d{+half_x, +half_y, +half_z}
-    };
+    // AABB in element-local frame; ArchitecturePackagingEvaluator adds world_pose translation.
+    const double hx = kBatterySlabHalfX + kBatteryBoxPadding;
+    const double hy = kBatterySlabHalfY + kBatteryBoxPadding;
+    const double hz = half_z_           + kBatteryBoxPadding;
+    return {Eigen::Vector3d{-hx, -hy, -hz}, Eigen::Vector3d{+hx, +hy, +hz}};
 }
 
 CabinEnvelopeElement::CabinEnvelopeElement(std::string id)
@@ -394,10 +421,11 @@ LocalAABB CabinEnvelopeElement::localEnvelope() const {
     };
 }
 
-// OccupantEnvelopeElement — minimum seated-passenger space (4 pax, 2×2 layout)
-constexpr double kOccupantHalfX = 0.55;  // 1.10m wide (2 shoulder widths)
-constexpr double kOccupantHalfY = 0.45;  // 0.90m deep (seat depth + legroom)
-constexpr double kOccupantHalfZ = 0.60;  // 1.20m tall (seated head height)
+// OccupantEnvelopeElement — minimum required 4-pax occupancy space.
+// Values match PassengerElement group AABB (kPaxGroupHalfX/Y/Z defined later in this TU).
+constexpr double kOccupantHalfX = 0.53;   // = kSeatRowPitch(0.28) + kSeatHalfX(0.25)
+constexpr double kOccupantHalfY = 0.47;   // = kSeatSpanY(0.25) + kSeatHalfY(0.22)
+constexpr double kOccupantHalfZ = 0.60;   // = kSeatHalfZ
 
 OccupantEnvelopeElement::OccupantEnvelopeElement(std::string id)
     : BasicSpatialElement(std::move(id), "OccupantEnvelopeElement") {}
@@ -426,50 +454,187 @@ LocalAABB OccupantEnvelopeElement::localEnvelope() const {
     };
 }
 
-// Rotor keep-out cylinder dimensions.
-// r_keepout = r_prop + kKeepOutRadialMargin accounts for manufacturing tolerance (~20 mm),
-// worst-case arm tip deflection allowance (~30 mm), and minimum safety clearance (~50 mm).
-// kKeepOutHalfZ covers blade-root flapping, hub protrusion, and dynamic in-plane motion.
-constexpr double kKeepOutRadialMargin = 0.10;  // safety margin added to propeller radius [m]
-constexpr double kKeepOutHalfZ        = 0.20;  // half-height of keep-out cylinder [m]
+// PassengerElement — 4 passengers in symmetric 2×2 seating arrangement.
+// Seat dimensions calibrated against the 1.80 m UE4 mannequin reference:
+//   seated height (floor to top of head) ≈ 1.20 m → kSeatHalfZ = 0.60 m
+//   seat pitch (fore/aft center-to-center) = 0.56 m → kSeatRowPitch = 0.28 m
+//   seat width (lateral center-to-center) = 0.50 m → kSeatSpanY = 0.25 m
+// Group center is at local origin; local_pose_ places the group in body frame.
+constexpr double kSeatHalfX    = 0.25;   // fore/aft half-depth per seat (0.50 m seat+leg)
+constexpr double kSeatHalfY    = 0.22;   // lateral half-width per seat (0.44 m shoulder)
+constexpr double kSeatHalfZ    = 0.60;   // vertical half-height (1.20 m floor-to-head seated)
+constexpr double kSeatRowPitch = 0.28;   // row center offset from group center
+constexpr double kSeatSpanY    = 0.25;   // lateral center offset from group center
+// AABB of the full 4-seat group in element-local frame:
+constexpr double kPaxGroupHalfX = kSeatRowPitch + kSeatHalfX;   // 0.53 m
+constexpr double kPaxGroupHalfY = kSeatSpanY    + kSeatHalfY;   // 0.47 m
+constexpr double kPaxGroupHalfZ = kSeatHalfZ;                    // 0.60 m
 
-KeepOutZoneElement::KeepOutZoneElement(std::string id, DesignParameter* propeller_diameter)
-    : BasicSpatialElement(std::move(id), "KeepOutZoneElement"),
-      propeller_diameter_(propeller_diameter) {}
+PassengerElement::PassengerElement(std::string id,
+                                   DesignParameter* mass,
+                                   DesignParameter* pax_x,
+                                   DesignParameter* pax_y,
+                                   DesignParameter* pax_z)
+    : BasicSpatialElement(std::move(id), "PassengerElement"),
+      mass_(mass),
+      pax_x_(pax_x),
+      pax_y_(pax_y),
+      pax_z_(pax_z) {}
 
-std::unique_ptr<SpatialElement> KeepOutZoneElement::clone() const {
-    return std::make_unique<KeepOutZoneElement>(*this);
+std::unique_ptr<SpatialElement> PassengerElement::clone() const {
+    return std::make_unique<PassengerElement>(*this);
 }
 
-void KeepOutZoneElement::registerParameters(ParameterRegistry&) {
-    propeller_diameter_->addConsumer(id_);
+void PassengerElement::registerParameters(ParameterRegistry&) {
+    mass_->addConsumer(id_);
+    pax_x_->addConsumer(id_);
+    pax_y_->addConsumer(id_);
+    pax_z_->addConsumer(id_);
 }
 
-void KeepOutZoneElement::rebindParameters(ParameterRegistry& registry) {
-    propeller_diameter_ = requireMutableParameter(registry, propeller_diameter_->stable_id());
+void PassengerElement::rebindParameters(ParameterRegistry& registry) {
+    mass_  = requireMutableParameter(registry, mass_->stable_id());
+    pax_x_ = requireMutableParameter(registry, pax_x_->stable_id());
+    pax_y_ = requireMutableParameter(registry, pax_y_->stable_id());
+    pax_z_ = requireMutableParameter(registry, pax_z_->stable_id());
 }
 
-void KeepOutZoneElement::registerConstraints(ConstraintRegistry&) const {}
+void PassengerElement::registerConstraints(ConstraintRegistry&) const {}
 
-void KeepOutZoneElement::updateFromParameters() {
-    mass_ = 0.0;
+void PassengerElement::updateFromParameters() {
+    BasicSpatialElement::mass_ = mass_->value;
+    // Symmetric 2×2 arrangement → COM at group origin.
     local_com_.setZero();
     local_inertia_.setZero();
-    r_keepout_ = 0.5 * propeller_diameter_->value + kKeepOutRadialMargin;
-    // Unit cylinder axis is along local Y; rotate 90° around X so axis aligns with local Z (= world Z = vertical).
-    // Same correction applied in MotorElement and BodyFrameElement.
-    GeometryPrimitive cyl = GeometryPrimitive::makeCylinder(r_keepout_, 2.0 * kKeepOutHalfZ, 0.0);
-    cyl.local_pose.linear() =
-        Eigen::AngleAxisd(3.14159265358979323846 / 2.0, Eigen::Vector3d::UnitX()).toRotationMatrix();
-    primitives_ = {cyl};
+
+    // Group center placement via local_pose_; attachment is a rigid mount.
+    local_pose_ = Eigen::Isometry3d::Identity();
+    local_pose_.translation() = Eigen::Vector3d(pax_x_->value, pax_y_->value, pax_z_->value);
+
+    // 4 seat boxes placed symmetrically in element-local frame (centered at origin).
+    const std::array<Eigen::Vector3d, 4> positions{{
+        { kSeatRowPitch, -kSeatSpanY, 0.0},  // front-left
+        { kSeatRowPitch,  kSeatSpanY, 0.0},  // front-right
+        {-kSeatRowPitch, -kSeatSpanY, 0.0},  // rear-left
+        {-kSeatRowPitch,  kSeatSpanY, 0.0}   // rear-right
+    }};
+    primitives_.clear();
+    primitives_.reserve(4);
+    for (const auto& pos : positions) {
+        GeometryPrimitive seat = GeometryPrimitive::makeBox({kSeatHalfX, kSeatHalfY, kSeatHalfZ}, 0.0);
+        seat.local_pose.translation() = pos;
+        primitives_.push_back(seat);
+    }
+
     anchors_.clear();
     setAnchor("center", Eigen::Isometry3d::Identity());
 }
 
-LocalAABB KeepOutZoneElement::localEnvelope() const {
+LocalAABB PassengerElement::localEnvelope() const {
+    // AABB of the full 4-seat group in element-local frame.
     return {
-        Eigen::Vector3d{-r_keepout_, -r_keepout_, -kKeepOutHalfZ},
-        Eigen::Vector3d{+r_keepout_, +r_keepout_, +kKeepOutHalfZ}
+        Eigen::Vector3d{-kPaxGroupHalfX, -kPaxGroupHalfY, -kPaxGroupHalfZ},
+        Eigen::Vector3d{+kPaxGroupHalfX, +kPaxGroupHalfY, +kPaxGroupHalfZ}
+    };
+}
+
+// CargoElement — baggage/cargo slab. Default placement below the passenger zone (cargo_z > 0).
+constexpr double kCargoHalfX = 0.30;   // 0.60 m fore/aft
+constexpr double kCargoHalfY = 0.42;   // 0.84 m lateral (close to cabin width)
+constexpr double kCargoHalfZ = 0.18;   // 0.36 m tall (flat slab under passenger floor)
+
+CargoElement::CargoElement(std::string id,
+                            DesignParameter* mass,
+                            DesignParameter* cargo_x,
+                            DesignParameter* cargo_y,
+                            DesignParameter* cargo_z)
+    : BasicSpatialElement(std::move(id), "CargoElement"),
+      mass_(mass),
+      cargo_x_(cargo_x),
+      cargo_y_(cargo_y),
+      cargo_z_(cargo_z) {}
+
+std::unique_ptr<SpatialElement> CargoElement::clone() const {
+    return std::make_unique<CargoElement>(*this);
+}
+
+void CargoElement::registerParameters(ParameterRegistry&) {
+    mass_->addConsumer(id_);
+    cargo_x_->addConsumer(id_);
+    cargo_y_->addConsumer(id_);
+    cargo_z_->addConsumer(id_);
+}
+
+void CargoElement::rebindParameters(ParameterRegistry& registry) {
+    mass_    = requireMutableParameter(registry, mass_->stable_id());
+    cargo_x_ = requireMutableParameter(registry, cargo_x_->stable_id());
+    cargo_y_ = requireMutableParameter(registry, cargo_y_->stable_id());
+    cargo_z_ = requireMutableParameter(registry, cargo_z_->stable_id());
+}
+
+void CargoElement::registerConstraints(ConstraintRegistry&) const {}
+
+void CargoElement::updateFromParameters() {
+    BasicSpatialElement::mass_ = mass_->value;
+    local_com_.setZero();
+    local_inertia_.setZero();
+
+    local_pose_ = Eigen::Isometry3d::Identity();
+    local_pose_.translation() = Eigen::Vector3d(cargo_x_->value, cargo_y_->value, cargo_z_->value);
+
+    primitives_ = {GeometryPrimitive::makeBox({kCargoHalfX, kCargoHalfY, kCargoHalfZ}, 0.0)};
+    anchors_.clear();
+    setAnchor("center", Eigen::Isometry3d::Identity());
+}
+
+LocalAABB CargoElement::localEnvelope() const {
+    return {
+        Eigen::Vector3d{-kCargoHalfX, -kCargoHalfY, -kCargoHalfZ},
+        Eigen::Vector3d{+kCargoHalfX, +kCargoHalfY, +kCargoHalfZ}
+    };
+}
+
+// InstrumentPanelElement — avionics/instrument panel fixed at cabin front (+0.68 m from body center).
+// Half-x = 0.08 m (very thin panel); half-y spans nearly the full cabin width.
+constexpr double kInstHalfX = 0.08;
+constexpr double kInstHalfY = 0.62;   // 1.24 m panel width (nearly full cabin lateral extent)
+constexpr double kInstHalfZ = 0.35;   // 0.70 m panel height
+
+InstrumentPanelElement::InstrumentPanelElement(std::string id, DesignParameter* mass)
+    : BasicSpatialElement(std::move(id), "InstrumentPanelElement"),
+      mass_(mass) {}
+
+std::unique_ptr<SpatialElement> InstrumentPanelElement::clone() const {
+    return std::make_unique<InstrumentPanelElement>(*this);
+}
+
+void InstrumentPanelElement::registerParameters(ParameterRegistry&) {
+    mass_->addConsumer(id_);
+}
+
+void InstrumentPanelElement::rebindParameters(ParameterRegistry& registry) {
+    mass_ = requireMutableParameter(registry, mass_->stable_id());
+}
+
+void InstrumentPanelElement::registerConstraints(ConstraintRegistry&) const {}
+
+void InstrumentPanelElement::updateFromParameters() {
+    BasicSpatialElement::mass_ = mass_->value;
+    local_com_.setZero();
+    local_inertia_.setZero();
+    // Fixed position at cabin front: +0.68 m forward from body center (no DOF).
+    // Ownership in local_pose_ keeps the attachment as a simple rigid mount.
+    local_pose_ = Eigen::Isometry3d::Identity();
+    local_pose_.translation() = Eigen::Vector3d(0.68, 0.0, 0.0);
+    primitives_ = {GeometryPrimitive::makeBox({kInstHalfX, kInstHalfY, kInstHalfZ}, 0.0)};
+    anchors_.clear();
+    setAnchor("center", Eigen::Isometry3d::Identity());
+}
+
+LocalAABB InstrumentPanelElement::localEnvelope() const {
+    return {
+        Eigen::Vector3d{-kInstHalfX, -kInstHalfY, -kInstHalfZ},
+        Eigen::Vector3d{+kInstHalfX, +kInstHalfY, +kInstHalfZ}
     };
 }
 

@@ -55,11 +55,17 @@ public:
     [[nodiscard]] double Tmax() const;
     [[nodiscard]] double cT() const;
     [[nodiscard]] double propellerDiameter() const;
-    [[nodiscard]] double payloadMass() const;
-    [[nodiscard]] double batteryMass() const;    // Phase 2: battery pack mass [kg]
-    [[nodiscard]] double batteryZOffset() const; // Task 3: battery z placement DOF [m]
-    [[nodiscard]] double payloadXOffset() const; // Task 3: payload x placement DOF [m]
-    [[nodiscard]] double payloadYOffset() const; // Task 3: payload y placement DOF [m]
+    [[nodiscard]] double payloadMass() const;   // returns pax + cargo + instrument sum
+    [[nodiscard]] double batteryMass() const;   // Phase 2: battery pack mass [kg]
+    [[nodiscard]] double batteryX() const;
+    [[nodiscard]] double batteryY() const;
+    [[nodiscard]] double batteryZ() const;
+    [[nodiscard]] double passengerX() const;
+    [[nodiscard]] double passengerY() const;
+    [[nodiscard]] double passengerZ() const;
+    [[nodiscard]] double cargoX() const;
+    [[nodiscard]] double cargoY() const;
+    [[nodiscard]] double cargoZ() const;
     [[nodiscard]] bool useVehicleModel() const;
     [[nodiscard]] double nominalMass() const;
     [[nodiscard]] double gravity() const;
@@ -94,13 +100,21 @@ private:
     DesignParameter* Tmax_parameter_ = nullptr;
     DesignParameter* cT_parameter_ = nullptr;
     DesignParameter* dprop_parameter_ = nullptr;
-    DesignParameter* payload_parameter_ = nullptr;
     DesignParameter* r_o_parameter_ = nullptr;
     DesignParameter* t_wall_parameter_ = nullptr;
-    DesignParameter* mbat_parameter_ = nullptr;     // Phase 2: battery pack mass
-    DesignParameter* zbatoff_parameter_ = nullptr;  // Task 3: battery z placement DOF
-    DesignParameter* xpayload_parameter_ = nullptr; // Task 3: payload x placement DOF
-    DesignParameter* ypayload_parameter_ = nullptr; // Task 3: payload y placement DOF
+    DesignParameter* mbat_parameter_ = nullptr;
+    DesignParameter* m_pax_parameter_ = nullptr;
+    DesignParameter* m_cargo_parameter_ = nullptr;
+    DesignParameter* m_instrument_parameter_ = nullptr;
+    DesignParameter* pax_x_parameter_ = nullptr;
+    DesignParameter* pax_y_parameter_ = nullptr;
+    DesignParameter* pax_z_parameter_ = nullptr;
+    DesignParameter* cargo_x_parameter_ = nullptr;
+    DesignParameter* cargo_y_parameter_ = nullptr;
+    DesignParameter* cargo_z_parameter_ = nullptr;
+    DesignParameter* bat_x_parameter_ = nullptr;
+    DesignParameter* bat_y_parameter_ = nullptr;
+    DesignParameter* bat_z_parameter_ = nullptr;
 };
 
 }  // namespace hexaarch::core

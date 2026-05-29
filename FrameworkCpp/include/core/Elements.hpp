@@ -92,10 +92,14 @@ public:
 
 class BatteryElement final : public BasicSpatialElement, public IEnergyStorage, public IEnvelopeProvider {
 public:
-    // m_bat: battery pack mass design variable (contributes to total mass and energy capacity).
-    // thrust_max / propeller_diameter: used for geometry scaling only, not for mass.
-    BatteryElement(std::string id, DesignParameter* m_bat,
-                   DesignParameter* thrust_max, DesignParameter* propeller_diameter);
+    // bat_x/y/z: 3-DOF placement from body center; element encodes them in local_pose_.
+    // Geometry is a flat slab sized from m_bat alone: volume = m_bat / pack_density,
+    // with fixed plan area 1.30 × 1.50 m and height varying with capacity.
+    BatteryElement(std::string id,
+                   DesignParameter* m_bat,
+                   DesignParameter* bat_x,
+                   DesignParameter* bat_y,
+                   DesignParameter* bat_z);
     [[nodiscard]] std::unique_ptr<SpatialElement> clone() const override;
     void registerParameters(ParameterRegistry& registry) override;
     void rebindParameters(ParameterRegistry& registry) override;
@@ -106,8 +110,10 @@ public:
 
 private:
     DesignParameter* m_bat_;
-    DesignParameter* thrust_max_;
-    DesignParameter* propeller_diameter_;
+    DesignParameter* bat_x_;
+    DesignParameter* bat_y_;
+    DesignParameter* bat_z_;
+    double half_z_ = 0.0;  // cached: volume / (4 × slab_half_x × slab_half_y), updated each call
 };
 
 class CabinEnvelopeElement final : public BasicSpatialElement, public IEnvelopeProvider {
@@ -134,21 +140,67 @@ public:
     [[nodiscard]] LocalAABB localEnvelope() const override;
 };
 
-// Zero-mass virtual element representing the swept disk volume of one rotor.
-// One per motor; placed at the motor axis position. Used for rotor keep-out packaging checks.
-class KeepOutZoneElement final : public BasicSpatialElement, public IEnvelopeProvider {
+class PassengerElement final : public BasicSpatialElement,
+                               public IPayloadMassContributor,
+                               public IEnvelopeProvider {
 public:
-    explicit KeepOutZoneElement(std::string id, DesignParameter* propeller_diameter);
+    // Represents the 4-passenger group (2×2 seating).
+    // pax_x/y/z: 3-DOF placement of the group center relative to body center.
+    // Primitives are 4 seat boxes arranged symmetrically in element-local frame.
+    PassengerElement(std::string id,
+                     DesignParameter* mass,
+                     DesignParameter* pax_x,
+                     DesignParameter* pax_y,
+                     DesignParameter* pax_z);
     [[nodiscard]] std::unique_ptr<SpatialElement> clone() const override;
     void registerParameters(ParameterRegistry& registry) override;
     void rebindParameters(ParameterRegistry& registry) override;
     void registerConstraints(ConstraintRegistry& registry) const override;
     void updateFromParameters() override;
     [[nodiscard]] LocalAABB localEnvelope() const override;
-
 private:
-    DesignParameter* propeller_diameter_;
-    double r_keepout_ = 0.0;  // cached: r_prop + kKeepOutRadialMargin
+    DesignParameter* mass_;
+    DesignParameter* pax_x_;
+    DesignParameter* pax_y_;
+    DesignParameter* pax_z_;
+};
+
+class CargoElement final : public BasicSpatialElement,
+                            public IPayloadMassContributor,
+                            public IEnvelopeProvider {
+public:
+    // cargo_x/y/z: 3-DOF placement relative to body center.
+    CargoElement(std::string id,
+                 DesignParameter* mass,
+                 DesignParameter* cargo_x,
+                 DesignParameter* cargo_y,
+                 DesignParameter* cargo_z);
+    [[nodiscard]] std::unique_ptr<SpatialElement> clone() const override;
+    void registerParameters(ParameterRegistry& registry) override;
+    void rebindParameters(ParameterRegistry& registry) override;
+    void registerConstraints(ConstraintRegistry& registry) const override;
+    void updateFromParameters() override;
+    [[nodiscard]] LocalAABB localEnvelope() const override;
+private:
+    DesignParameter* mass_;
+    DesignParameter* cargo_x_;
+    DesignParameter* cargo_y_;
+    DesignParameter* cargo_z_;
+};
+
+class InstrumentPanelElement final : public BasicSpatialElement,
+                                      public IPayloadMassContributor,
+                                      public IEnvelopeProvider {
+public:
+    InstrumentPanelElement(std::string id, DesignParameter* mass);
+    [[nodiscard]] std::unique_ptr<SpatialElement> clone() const override;
+    void registerParameters(ParameterRegistry& registry) override;
+    void rebindParameters(ParameterRegistry& registry) override;
+    void registerConstraints(ConstraintRegistry& registry) const override;
+    void updateFromParameters() override;
+    [[nodiscard]] LocalAABB localEnvelope() const override;
+private:
+    DesignParameter* mass_;
 };
 
 class ArmElement final : public BasicSpatialElement, public IStructuralBeam, public ILoadReceiver {

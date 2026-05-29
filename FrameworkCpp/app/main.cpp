@@ -3,6 +3,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -13,9 +14,13 @@
 #include "analysis/ComparisonReporter.hpp"
 #include "analysis/CsvExporter.hpp"
 #include "analysis/ParetoAnalyzer.hpp"
+#include "calibration/Calibrator.hpp"
+#include "calibration/FlightData.hpp"
 #include "core/HexacopterArchitecture.hpp"
 #include "core/Timestamp.hpp"
 #include "evaluation/ArchitectureEvaluator.hpp"
+#include "mission/MissionEvaluator.hpp"
+#include "mission/MissionProfile.hpp"
 #include "nlohmann/json.hpp"
 #include "optimization/DesignVectorMapper.hpp"
 #include "optimization/MooRunner.hpp"
@@ -42,7 +47,9 @@ enum class CliMode {
     soo,
     moo,
     compare,
-    visualize
+    visualize,
+    calibrate,
+    mission
 };
 
 struct CliOptions {
@@ -54,24 +61,31 @@ struct CliOptions {
     unsigned moo_generations = 60U;
     bool visualize = false;
     bool plot_acs = false;
+    std::optional<std::filesystem::path> mission_profile_path;  // --mission <profile.json>
+    std::optional<std::filesystem::path> calibration_csv_path;  // calibrate <csv> | --flight-data <csv>
 };
 
 void printUsage() {
     std::cout
         << "HexaArch CLI\n"
         << "Usage:\n"
-        << "  FrameworkCpp.exe [eval|soo|moo|compare|visualize] [--output-dir <path>] [--soo-pop <n>] [--soo-gen <n>] [--moo-pop <n>] [--moo-gen <n>] [--visualize]\n"
+        << "  FrameworkCpp.exe [eval|soo|moo|compare|visualize|calibrate|mission] [options]\n"
         << "Modes:\n"
-        << "  eval       Evaluate the baseline Stage 1 design.\n"
-        << "  soo        Run single-objective optimization.\n"
-        << "  moo        Run multi-objective optimization.\n"
-        << "  compare    Run baseline + SOO + MOO and export reports.\n"
-        << "  visualize  Browse and render exported result files.\n"
+        << "  eval                       Evaluate the baseline Stage 1 design.\n"
+        << "  soo                        Run single-objective optimization.\n"
+        << "  moo                        Run multi-objective optimization.\n"
+        << "  compare                    Run baseline + SOO + MOO and export reports.\n"
+        << "  visualize                  Browse and render exported result files.\n"
+        << "  calibrate <flight.csv>     Identify physics params from flight-data CSV.\n"
+        << "  mission   <profile.json>   Evaluate baseline with a multi-segment mission profile.\n"
         << "Flags:\n"
-        << "  --visualize  Show real-time architecture viewer during soo/moo optimization.\n"
-        << "  --plot-acs   Generate SVG ACS plots + CSV vertex dump in <output-dir>/acs/.\n"
-        << "               Worst-case fault motor is auto-detected from ACS retention.\n"
-        << "               Open .svg files in any browser — no external tools required.\n";
+        << "  --output-dir <path>        Output directory (default: ./output).\n"
+        << "  --soo-pop/--soo-gen <n>    SOO population / generation count.\n"
+        << "  --moo-pop/--moo-gen <n>    MOO population / generation count.\n"
+        << "  --visualize                Show real-time viewer during soo/moo optimization.\n"
+        << "  --plot-acs                 Generate SVG ACS plots in <output-dir>/acs/.\n"
+        << "  --mission <profile.json>   Apply a mission profile to eval/soo/moo/compare/mission modes.\n"
+        << "  --flight-data <flight.csv> Used by 'calibrate' (alternative to positional arg).\n";
 }
 
 std::optional<CliMode> parseMode(const std::string_view token) {
@@ -89,6 +103,12 @@ std::optional<CliMode> parseMode(const std::string_view token) {
     }
     if (token == "visualize") {
         return CliMode::visualize;
+    }
+    if (token == "calibrate") {
+        return CliMode::calibrate;
+    }
+    if (token == "mission") {
+        return CliMode::mission;
     }
     return std::nullopt;
 }
@@ -135,9 +155,27 @@ std::optional<CliOptions> parseArgs(const std::vector<std::string>& args) {
             options.plot_acs = true;
             continue;
         }
+        if (argument == "--mission" && index + 1 < args.size()) {
+            options.mission_profile_path = args.at(++index);
+            continue;
+        }
+        if (argument == "--flight-data" && index + 1 < args.size()) {
+            options.calibration_csv_path = args.at(++index);
+            continue;
+        }
 
         if (const auto mode = parseMode(argument)) {
             options.mode = *mode;
+            continue;
+        }
+
+        // Positional path argument for calibrate / mission modes.
+        if (options.mode == CliMode::calibrate && !options.calibration_csv_path.has_value()) {
+            options.calibration_csv_path = argument;
+            continue;
+        }
+        if (options.mode == CliMode::mission && !options.mission_profile_path.has_value()) {
+            options.mission_profile_path = argument;
             continue;
         }
 
@@ -158,6 +196,8 @@ CliOptions promptInteractive() {
         << "  3. moo\n"
         << "  4. compare\n"
         << "  5. visualize\n"
+        << "  6. calibrate (requires flight-data CSV)\n"
+        << "  7. mission   (requires mission profile JSON)\n"
         << "> ";
 
     int selection = 1;
@@ -174,6 +214,12 @@ CliOptions promptInteractive() {
             break;
         case 5:
             options.mode = CliMode::visualize;
+            break;
+        case 6:
+            options.mode = CliMode::calibrate;
+            break;
+        case 7:
+            options.mode = CliMode::mission;
             break;
         case 1:
         default:
@@ -200,14 +246,237 @@ CliOptions promptInteractive() {
         options.visualize = (!answer.empty() && (answer[0] == 'y' || answer[0] == 'Y'));
     }
 
-    if (options.mode != CliMode::moo && options.mode != CliMode::visualize) {
+    if (options.mode != CliMode::moo && options.mode != CliMode::visualize &&
+        options.mode != CliMode::calibrate) {
         std::cout << "Generate ACS plots (SVG, opens in any browser)? [y/N]: ";
         std::string answer;
         std::getline(std::cin, answer);
         options.plot_acs = (!answer.empty() && (answer[0] == 'y' || answer[0] == 'Y'));
     }
 
+    if (options.mode == CliMode::calibrate) {
+        std::cout << "Flight-data CSV path: ";
+        std::string path;
+        std::getline(std::cin, path);
+        if (!path.empty()) options.calibration_csv_path = path;
+    }
+    if (options.mode == CliMode::mission || options.mode == CliMode::evaluate ||
+        options.mode == CliMode::soo || options.mode == CliMode::moo ||
+        options.mode == CliMode::compare) {
+        std::cout << "Mission profile JSON (blank to skip): ";
+        std::string path;
+        std::getline(std::cin, path);
+        if (!path.empty()) options.mission_profile_path = path;
+    }
+
     return options;
+}
+
+// Forward declaration — definition follows runAcsPlot below.
+void runAcsPlot(const hexaarch::evaluation::EvaluationResult&, const CliOptions&, const std::string&);
+
+// Loads the mission profile from --mission <path> (if any) and attaches it to context. Returns
+// true if a profile was supplied AND loaded successfully; false if no profile was requested.
+// Exits the caller via std::exit on parse failure so an invalid profile never falls through to a
+// silent legacy-hover evaluation.
+bool attachMissionProfile(
+    const CliOptions& options,
+    hexaarch::evaluation::EvaluationContext& context) {
+    if (!options.mission_profile_path.has_value()) return false;
+    const auto profile = hexaarch::mission::loadMissionProfileJson(*options.mission_profile_path);
+    if (!profile.has_value()) {
+        std::cerr << "[" << currentTimestamp()
+                  << "] ERROR: failed to load mission profile: "
+                  << options.mission_profile_path->string() << "\n";
+        std::exit(1);
+    }
+    context.mission_profile =
+        std::make_shared<const hexaarch::mission::MissionProfile>(std::move(*profile));
+    std::cout << "[" << currentTimestamp()
+              << "] Mission profile loaded: "
+              << (context.mission_profile->name.empty()
+                  ? options.mission_profile_path->filename().string()
+                  : context.mission_profile->name)
+              << "  segments=" << context.mission_profile->segments.size() << '\n';
+    return true;
+}
+
+void printMissionSummary(const hexaarch::evaluation::EvaluationResult& result) {
+    if (!result.stage1.mission_active) return;
+    std::cout << std::fixed << std::setprecision(2)
+              << "[" << currentTimestamp() << "] Mission:"
+              << " time=" << result.stage1.mission_total_time_s << " s"
+              << " range=" << result.stage1.mission_cruise_distance_m / 1000.0 << " km"
+              << " E_total=" << result.stage1.mission_energy_with_aux_wh / 1000.0 << " kWh"
+              << " E_hover=" << result.stage1.mission_hover_energy_wh / 1000.0 << " kWh"
+              << " E_cruise=" << result.stage1.mission_cruise_energy_wh / 1000.0 << " kWh"
+              << " P_peak=" << result.stage1.mission_peak_power_w / 1000.0 << " kW"
+              << " reserve=" << result.stage1.mission_energy_reserve_fraction * 100.0 << " %\n";
+}
+
+void runCalibration(const CliOptions& options) {
+    if (!options.calibration_csv_path.has_value()) {
+        std::cerr << "[" << currentTimestamp() << "] ERROR: 'calibrate' mode requires a flight-data CSV.\n";
+        return;
+    }
+    auto data = hexaarch::calibration::loadFlightDataCsv(*options.calibration_csv_path);
+    if (!data.has_value()) {
+        std::cerr << "[" << currentTimestamp() << "] ERROR: cannot load flight data.\n";
+        return;
+    }
+
+    // Effective disk geometry from the baseline architecture.
+    hexaarch::core::HexacopterArchitecture arch;
+    arch.rebuildAssembly();
+    const double max_arm = std::max({arch.Lx(), arch.Lyi(), arch.Lyo()});
+    constexpr double kPi = 3.14159265358979323846;
+    const double r_eff = std::max(max_arm * 0.5, 0.1);
+    const double A_single = kPi * r_eff * r_eff;
+
+    hexaarch::calibration::CalibrationBounds bounds;
+    hexaarch::calibration::CalibrationMask mask;
+    hexaarch::calibration::CalibrationProblem problem(
+        std::move(*data), A_single, 6, bounds, mask);
+
+    hexaarch::evaluation::EvaluationContext context;
+    hexaarch::calibration::CalibrationParameters initial;
+    initial.figure_of_merit                   = context.figure_of_merit;
+    initial.motor_efficiency                  = context.motor_efficiency;
+    initial.esc_efficiency                    = context.esc_efficiency;
+    initial.battery_specific_energy_wh_per_kg = context.battery_specific_energy_wh_per_kg;
+    initial.battery_pack_efficiency           = context.battery_pack_efficiency;
+    initial.parasite_drag_area_m2             = context.parasite_drag_area_m2;
+
+    hexaarch::calibration::CalibrationOptions opt;
+    opt.verbose = true;
+    const auto outcome = hexaarch::calibration::Calibrator{}.fit(problem, initial, opt);
+
+    std::cout << std::fixed << std::setprecision(6)
+              << "[" << currentTimestamp() << "] Calibration: iter=" << outcome.diagnostics.iterations
+              << "  cost(init)=" << outcome.diagnostics.initial_cost
+              << "  cost(final)=" << outcome.diagnostics.final_cost
+              << "  converged=" << (outcome.diagnostics.converged ? "yes" : "no") << '\n'
+              << "[" << currentTimestamp() << "] Residual: mean=" << outcome.diagnostics.mean_residual_w
+              << " W  max=" << outcome.diagnostics.max_residual_w << " W\n"
+              << "[" << currentTimestamp() << "] Parameters:\n"
+              << "  figure_of_merit                 = " << outcome.parameters.figure_of_merit << "\n"
+              << "  motor_efficiency                = " << outcome.parameters.motor_efficiency << "\n"
+              << "  esc_efficiency                  = " << outcome.parameters.esc_efficiency << "\n"
+              << "  battery_specific_energy_wh/kg   = " << outcome.parameters.battery_specific_energy_wh_per_kg << "\n"
+              << "  battery_pack_efficiency         = " << outcome.parameters.battery_pack_efficiency << "\n"
+              << "  parasite_drag_area_m2           = " << outcome.parameters.parasite_drag_area_m2 << "\n";
+
+    if (ensureOutputDirectory(options.output_dir)) {
+        // Per-point residuals CSV: lets the user plot measured vs. predicted in Excel/Python.
+        const auto resid_path = options.output_dir / "calibration_residuals.csv";
+        std::ofstream resid(resid_path);
+        if (resid) {
+            resid << "label,mass_kg,airspeed_mps,climb_rate_mps,thrust_total_n,"
+                     "power_measured_w,power_predicted_w,residual_w,relative_error_pct\n";
+            for (const auto& p : problem.data()) {
+                const double pred = problem.predictPower(outcome.parameters, p);
+                const double res = pred - p.power_total_w;
+                const double rel = res / std::max(p.power_total_w, 1.0) * 100.0;
+                resid << p.label << "," << p.mass_kg << "," << p.airspeed_mps << ","
+                      << p.climb_rate_mps << "," << p.thrust_total_n << ","
+                      << p.power_total_w << "," << pred << "," << res << "," << rel << "\n";
+            }
+            std::cout << "[" << currentTimestamp() << "] Calibration residuals CSV: "
+                      << resid_path.string() << '\n';
+        }
+
+        const auto out_path = options.output_dir / "calibration_result.json";
+        std::ofstream out(out_path);
+        if (out) {
+            out << "{\n"
+                << "  \"flight_data_csv\": \"" << options.calibration_csv_path->generic_string() << "\",\n"
+                << "  \"iterations\": " << outcome.diagnostics.iterations << ",\n"
+                << "  \"converged\": " << (outcome.diagnostics.converged ? "true" : "false") << ",\n"
+                << "  \"cost_initial\": " << outcome.diagnostics.initial_cost << ",\n"
+                << "  \"cost_final\": " << outcome.diagnostics.final_cost << ",\n"
+                << "  \"residual_mean_w\": " << outcome.diagnostics.mean_residual_w << ",\n"
+                << "  \"residual_max_w\": " << outcome.diagnostics.max_residual_w << ",\n"
+                << "  \"parameters\": {\n"
+                << "    \"figure_of_merit\": " << outcome.parameters.figure_of_merit << ",\n"
+                << "    \"motor_efficiency\": " << outcome.parameters.motor_efficiency << ",\n"
+                << "    \"esc_efficiency\": " << outcome.parameters.esc_efficiency << ",\n"
+                << "    \"battery_specific_energy_wh_per_kg\": " << outcome.parameters.battery_specific_energy_wh_per_kg << ",\n"
+                << "    \"battery_pack_efficiency\": " << outcome.parameters.battery_pack_efficiency << ",\n"
+                << "    \"parasite_drag_area_m2\": " << outcome.parameters.parasite_drag_area_m2 << "\n"
+                << "  }\n"
+                << "}\n";
+            std::cout << "[" << currentTimestamp() << "] Calibration written to: "
+                      << out_path.string() << '\n';
+        }
+    }
+}
+
+// Re-runs the mission evaluator (cheap) only to grab the per-segment breakdown for CSV export.
+// The Stage1 result already carries the aggregate totals; segment-level detail isn't kept there
+// to avoid bloating EvaluationResult, so we recompute via MissionEvaluator directly.
+void writeMissionSegmentsCsv(
+    const std::filesystem::path& csv_path,
+    const hexaarch::evaluation::EvaluationContext& context,
+    const hexaarch::evaluation::EvaluationResult& result) {
+    if (!context.mission_profile) return;
+    constexpr double kPi = 3.14159265358979323846;
+    const double r_eff = std::max(result.physical_model.structural.max_arm_length * 0.5, 0.1);
+    const double single_disk_area = kPi * r_eff * r_eff;
+    const auto mission_result = hexaarch::mission::MissionEvaluator{}.evaluate(
+        *context.mission_profile, result.powertrain, result.physical_model,
+        single_disk_area, context);
+    std::ofstream f(csv_path);
+    if (!f) return;
+    f << "idx,kind,label,duration_s,airspeed_mps,climb_rate_mps,power_w,energy_wh,distance_m\n";
+    for (std::size_t i = 0; i < mission_result.segments.size(); ++i) {
+        const auto& s = mission_result.segments[i];
+        f << i << "," << hexaarch::mission::segmentKindToString(s.kind) << ","
+          << s.label << "," << s.duration_s << "," << s.airspeed_mps << ","
+          << s.climb_rate_mps << "," << s.electrical_power_w << ","
+          << s.energy_wh << "," << s.distance_m << "\n";
+    }
+}
+
+void runMission(
+    const hexaarch::core::HexacopterArchitecture& architecture,
+    const hexaarch::evaluation::EvaluationContext& context,
+    const CliOptions& options) {
+    const auto result = hexaarch::evaluation::ArchitectureEvaluator{}.evaluate(architecture, context);
+    std::cout << "[" << currentTimestamp() << "] Mission eval: "
+              << hexaarch::analysis::ComparisonReporter::summarize(result) << '\n';
+    printMissionSummary(result);
+    if (options.plot_acs) {
+        runAcsPlot(result, options, "Mission");
+    }
+
+    if (ensureOutputDirectory(options.output_dir) && result.stage1.mission_active) {
+        const auto segs_path = options.output_dir / "mission_segments.csv";
+        writeMissionSegmentsCsv(segs_path, context, result);
+        std::cout << "[" << currentTimestamp() << "] Mission segments CSV: "
+                  << segs_path.string() << '\n';
+        const auto out_path = options.output_dir / "mission_result.json";
+        std::ofstream out(out_path);
+        if (out) {
+            out << std::fixed << std::setprecision(4)
+                << "{\n"
+                << "  \"name\": \"" << (context.mission_profile ? context.mission_profile->name : "") << "\",\n"
+                << "  \"feasible\": " << (result.feasible ? "true" : "false") << ",\n"
+                << "  \"total_time_s\": " << result.stage1.mission_total_time_s << ",\n"
+                << "  \"total_distance_m\": " << result.stage1.mission_total_distance_m << ",\n"
+                << "  \"cruise_distance_m\": " << result.stage1.mission_cruise_distance_m << ",\n"
+                << "  \"total_energy_wh\": " << result.stage1.mission_total_energy_wh << ",\n"
+                << "  \"energy_with_aux_wh\": " << result.stage1.mission_energy_with_aux_wh << ",\n"
+                << "  \"hover_energy_wh\": " << result.stage1.mission_hover_energy_wh << ",\n"
+                << "  \"cruise_energy_wh\": " << result.stage1.mission_cruise_energy_wh << ",\n"
+                << "  \"peak_power_w\": " << result.stage1.mission_peak_power_w << ",\n"
+                << "  \"available_energy_wh\": " << result.stage1.bat_available_energy_wh << ",\n"
+                << "  \"energy_reserve_fraction\": " << result.stage1.mission_energy_reserve_fraction << ",\n"
+                << "  \"c_rate\": " << result.stage1.bat_c_rate << "\n"
+                << "}\n";
+            std::cout << "[" << currentTimestamp() << "] Mission summary written to: "
+                      << out_path.string() << '\n';
+        }
+    }
 }
 
 void runAcsPlot(
@@ -245,6 +514,7 @@ void printBaseline(
     std::cout << "[" << currentTimestamp() << "] Architecture id: " << architecture.id() << '\n';
     std::cout << "[" << currentTimestamp() << "] Baseline: "
               << hexaarch::analysis::ComparisonReporter::summarize(baseline) << '\n';
+    printMissionSummary(baseline);
     if (options.plot_acs) {
         runAcsPlot(baseline, options, "Baseline");
     }
@@ -280,6 +550,7 @@ void runSoo(
                   << hexaarch::analysis::ComparisonReporter::summarize(result.best_feasible->result) << '\n';
         std::cout << "[" << currentTimestamp() << "] Delta: "
                   << hexaarch::analysis::ComparisonReporter::compare(result.baseline, result.best_feasible->result) << '\n';
+        printMissionSummary(result.best_feasible->result);
     } else {
         std::cout << "[" << currentTimestamp() << "] Best feasible: none found\n";
         std::cout << "[" << currentTimestamp() << "] Raw best: "
@@ -676,6 +947,9 @@ int main(int argc, char** argv) {
     hexaarch::core::HexacopterArchitecture architecture;
     hexaarch::evaluation::EvaluationContext context;
 
+    // Attach mission profile early so every downstream mode sees the multi-segment energy budget.
+    attachMissionProfile(*parsed, context);
+
     switch (parsed->mode) {
         case CliMode::evaluate:
             printBaseline(architecture, context, *parsed);
@@ -697,6 +971,17 @@ int main(int argc, char** argv) {
             break;
         case CliMode::visualize:
             return runVisualizer(architecture, *parsed);
+        case CliMode::calibrate:
+            runCalibration(*parsed);
+            break;
+        case CliMode::mission:
+            if (!context.mission_profile) {
+                std::cerr << "[" << currentTimestamp()
+                          << "] 'mission' mode requires --mission <profile.json> or a positional arg.\n";
+                return 1;
+            }
+            runMission(architecture, context, *parsed);
+            break;
     }
 
     return 0;

@@ -1,9 +1,12 @@
 #pragma once
 
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "physics/Material.hpp"
+
+namespace hexaarch::mission { struct MissionProfile; }
 
 namespace hexaarch::evaluation {
 
@@ -49,12 +52,26 @@ struct EvaluationContext {
     double mission_time_emergency_min = 1.0;            // required fault-hover endurance after failure [min]
     double power_auxiliary_w = 500.0;                   // avionics + payload auxiliary draw [W]
 
+    // Multi-mission profile (cruise+hover). When set, BatteryEvaluator uses this instead of the
+    // two fixed mission_time_*_min legs above. shared_ptr so the EvaluationContext stays
+    // copyable and the optimizer can broadcast one profile across pagmo threads.
+    // Calibration knob: equivalent parasite-drag area Cd·A_ref of the airframe in cruise. Sized
+    // from typical UAM eVTOL flat-plate drag ~0.4-0.8 m²; the calibration module identifies it
+    // from measured cruise power vs. airspeed when flight data is available.
+    std::shared_ptr<const mission::MissionProfile> mission_profile;
+    double parasite_drag_area_m2 = 0.6;
+
     // Phase 4: Stiffness / deflection constraints (B in spec)
     // Allowable limits applied to the worst-case (over all members × load cases) values.
     // Deflection limit: 10 cm is tight for UAM arms but keeps compliance finite for CMA-ES.
     // Rotation limit: 0.10 rad ≈ 5.7° gives visible indicator of excessive tip rotation.
     double arm_tip_deflection_limit_m = 0.10;   // max allowable Euler-Bernoulli tip deflection [m]
     double arm_tip_rotation_limit_rad = 0.10;   // max allowable tip rotation [rad] (~5.7°)
+
+    // CG envelope: assembled center of mass must stay within this rectangular window so that
+    // hover trim authority is retained across all fault cases. Checked as hard constraint.
+    double cg_envelope_half_x = 0.40;  // |CG_x| <= this [m]  (fore/aft)
+    double cg_envelope_half_y = 0.25;  // |CG_y| <= this [m]  (lateral)
 
     std::vector<ObjectiveWeight> objective_weights{
         {"mass", 0.20},

@@ -19,7 +19,6 @@ constexpr double kBaselineLyi = 2.65;
 constexpr double kBaselineLyo = 5.50;
 constexpr double kBaselineCT = 0.03;
 constexpr double kBaselinePropDiameter = 0.40;
-constexpr double kBaselinePayload = 800.0;  // air-taxi: pilot + 3-4 pax × ~180 kg
 // Motor-2 fault (0-indexed; x=0, y=-Lyo) is the binding ACS case: requires T_max >= mg/2.
 // At payload=800, m_bat=400, default arms: m_total≈2130 kg → mg/2≈10450 N.
 // Default 12000 N starts the optimizer inside the feasible region (hover_margin≈+0.12).
@@ -258,24 +257,22 @@ double HexacopterArchitecture::propellerDiameter() const {
 }
 
 double HexacopterArchitecture::payloadMass() const {
-    return payload_parameter_->value;
+    return m_pax_parameter_->value + m_cargo_parameter_->value + m_instrument_parameter_->value;
 }
 
 double HexacopterArchitecture::batteryMass() const {
     return mbat_parameter_->value;
 }
 
-double HexacopterArchitecture::batteryZOffset() const {
-    return zbatoff_parameter_->value;
-}
-
-double HexacopterArchitecture::payloadXOffset() const {
-    return xpayload_parameter_->value;
-}
-
-double HexacopterArchitecture::payloadYOffset() const {
-    return ypayload_parameter_->value;
-}
+double HexacopterArchitecture::batteryX() const { return bat_x_parameter_->value; }
+double HexacopterArchitecture::batteryY() const { return bat_y_parameter_->value; }
+double HexacopterArchitecture::batteryZ() const { return bat_z_parameter_->value; }
+double HexacopterArchitecture::passengerX() const { return pax_x_parameter_->value; }
+double HexacopterArchitecture::passengerY() const { return pax_y_parameter_->value; }
+double HexacopterArchitecture::passengerZ() const { return pax_z_parameter_->value; }
+double HexacopterArchitecture::cargoX() const { return cargo_x_parameter_->value; }
+double HexacopterArchitecture::cargoY() const { return cargo_y_parameter_->value; }
+double HexacopterArchitecture::cargoZ() const { return cargo_z_parameter_->value; }
 
 bool HexacopterArchitecture::useVehicleModel() const {
     return use_vehicle_model_;
@@ -304,18 +301,44 @@ void HexacopterArchitecture::registerDefaultParameters() {
     parameters_.add({"T_max", id_, "N", "Maximum thrust per motor", kBaselineTmax, 8000.0, 20000.0, kBaselineTmax, true, 1.0});
     parameters_.add({"cT", id_, "-", "Moment to thrust ratio", kBaselineCT, 0.01, 0.08, kBaselineCT, false, 1.0});
     parameters_.add({"d_prop", id_, "m", "Propeller diameter", kBaselinePropDiameter, 0.20, 1.20, kBaselinePropDiameter, false, 1.0});
-    parameters_.add({"m_payload", id_, "kg", "Payload mass", kBaselinePayload, 400.0, 2000.0, kBaselinePayload, false, 1.0});
     parameters_.add({"arm_outer_radius", id_, "m", "Arm tube outer radius", 0.08, 0.02, 0.15, 0.08, true, 1.0});
     parameters_.add({"arm_wall_thickness", id_, "m", "Arm tube wall thickness", 0.005, 0.001, 0.020, 0.005, true, 1.0});
     // Phase 2: battery mass design variable. Contributes to total mass and energy capacity.
-    // Bounds calibrated so [100,1000] kg spans infeasible→comfortable energy reserve at baseline.
     parameters_.add({"m_bat", id_, "kg", "Battery pack mass", kBaselineBatteryMass, 100.0, 1000.0, kBaselineBatteryMass, true, 1.0});
-    // Task 3: placement DOFs. Base battery offset = 0.30 m from body bottom → center z = -0.70 m.
-    // Bounds [-0.20, +0.50] allow optimizer to explore; battery_in_cabin penalizes negative end.
-    parameters_.add({"z_bat_offset", id_, "m", "Battery z placement offset", 0.0, -0.20, 0.50, 0.0, true, 1.0});
-    // Payload x/y: bounds chosen to just exceed cabin half-size so the constraint has a gradient at the edge.
-    parameters_.add({"x_payload", id_, "m", "Payload x placement offset", 0.0, -0.30, 0.30, 0.0, true, 1.0});
-    parameters_.add({"y_payload", id_, "m", "Payload y placement offset", 0.0, -0.40, 0.40, 0.0, true, 1.0});
+    // Mass is fixed mission requirement — not optimized
+    parameters_.add({"m_pax",        id_, "kg", "Passenger mass",        600.0, 0.0, 2000.0,  600.0, false, 1.0});
+    parameters_.add({"m_cargo",      id_, "kg", "Cargo/baggage mass",    200.0, 0.0, 1000.0,  200.0, false, 1.0});
+    parameters_.add({"m_instrument", id_, "kg", "Instrument panel mass",  50.0, 0.0,  500.0,   50.0, false, 1.0});
+    // Placement DOFs (active — optimizer can adjust component positions)
+    // 3-DOF placement in body-frame NED (z-down: −z = above hub = toward ceiling; +z = toward floor).
+    // Z-stratified default layout — three distinct vertical zones (no x/y overlap needed):
+    //
+    //   Zone 1 — battery ceiling slab (bat_z = −0.90):
+    //     At 400 kg default, half_z ≈ 0.137 m → battery z ∈ [−1.037, −0.763]
+    //     Cabin ceiling at z=−1.10 → 0.063 m headroom above battery.
+    //
+    //   Zone 2 — passenger mid-cabin (pax_z = −0.10, half_z = 0.60):
+    //     Passenger z ∈ [−0.70, +0.50]
+    //     Battery bottom at −0.763 is above passenger top at −0.70 → gap ≈ 0.063 m ✓
+    //
+    //   Zone 3 — cargo floor slab (cargo_z = +0.75, half_z = 0.18):
+    //     Cargo z ∈ [+0.57, +0.93]
+    //     Passenger bottom at +0.50 is above cargo top at +0.57 → gap = 0.07 m ✓
+    //
+    // Battery is symmetric (bat_x/y = 0) and centered; passenger symmetric about both axes.
+    parameters_.add({"pax_x",   id_, "m", "Passenger group x",  0.00, -0.25,  0.25,  0.00, true, 1.0});
+    parameters_.add({"pax_y",   id_, "m", "Passenger group y",  0.00, -0.42,  0.42,  0.00, true, 1.0});
+    parameters_.add({"pax_z",   id_, "m", "Passenger group z", -0.10, -0.50,  0.40, -0.10, true, 1.0});
+    parameters_.add({"cargo_x", id_, "m", "Cargo x",            0.00, -0.50,  0.50,  0.00, true, 1.0});
+    parameters_.add({"cargo_y", id_, "m", "Cargo y",            0.00, -0.45,  0.45,  0.00, true, 1.0});
+    parameters_.add({"cargo_z", id_, "m", "Cargo z",            0.75,  0.30,  1.00,  0.75, true, 1.0});
+    // Battery: centered and symmetric (bat_x = bat_y = 0). bat_z in ceiling zone.
+    // Lower bound −1.00 keeps the slim slab (half_z ≤ 0.08 m) inside cabin (ceiling at z=−1.10):
+    //   at bat_z = −1.00, slab top = −1.00 − 0.08 − 0.02(pad) = −1.10 = exactly cabin ceiling.
+    // Optimizer may push bat_z positive (toward mid-cabin or floor) if energy constraints require.
+    parameters_.add({"bat_x",   id_, "m", "Battery x",          0.00, -0.50,  0.50,  0.00, true, 1.0});
+    parameters_.add({"bat_y",   id_, "m", "Battery y",          0.00, -0.55,  0.55,  0.00, true, 1.0});
+    parameters_.add({"bat_z",   id_, "m", "Battery z",         -0.90, -1.00,  0.85, -0.90, true, 1.0});
 }
 
 void HexacopterArchitecture::registerDefaultConstraints() {
@@ -427,32 +450,34 @@ void HexacopterArchitecture::registerDefaultConstraints() {
         }
     });
     constraints_.add({
-        "packaging::rotor_keepout",
+        "packaging::payload_components_nonoverlap",
         id_,
-        ConstraintSense::less_equal,
-        0.0,
-        true,
-        true,
-        1000.0,
+        ConstraintSense::less_equal, 0.0, true, true, 1000.0,
         [](const ConstraintEvaluationContext& context) {
-            Constraint constraint{"packaging::rotor_keepout", context.architecture.id(), ConstraintSense::less_equal, 0.0};
-            return constraint.evaluate(context.physical_model.packaging.rotor_keepout_intrusion_m);
+            Constraint c{"packaging::payload_components_nonoverlap",
+                context.architecture.id(), ConstraintSense::less_equal, 0.0};
+            return c.evaluate(context.physical_model.packaging.payload_internal_overlap);
         }
     });
-    // Lateral CG symmetry: |cg_y| <= 0.05 m keeps rotor loading near symmetric.
+    // CG envelope: both fore/aft and lateral offset must stay within prescribed bounds so that
+    // hover trim authority is retained. Reads limits from EvaluationContext so they're tunable.
     constraints_.add({
-        "packaging::cg_y_window",
+        "cg_envelope",
         id_,
         ConstraintSense::less_equal,
         0.0,
         true,
         true,
-        500.0,
+        800.0,
         [](const ConstraintEvaluationContext& context) {
-            const double cg_y = std::abs(context.physical_model.mass_properties.center_of_mass.y());
-            constexpr double kCgYLimit = 0.05;
-            Constraint constraint{"packaging::cg_y_window", context.architecture.id(), ConstraintSense::less_equal, 0.0};
-            return constraint.evaluate(cg_y - kCgYLimit);
+            const auto& cg = context.physical_model.mass_properties.center_of_mass;
+            const auto& ec = context.evaluation_context;
+            // Worst violation over both axes (positive = infeasible, 0 = on boundary).
+            const double vx = std::abs(cg.x()) - ec.cg_envelope_half_x;
+            const double vy = std::abs(cg.y()) - ec.cg_envelope_half_y;
+            const double violation = std::max(vx, vy);
+            Constraint constraint{"cg_envelope", context.architecture.id(), ConstraintSense::less_equal, 0.0};
+            return constraint.evaluate(violation);
         }
     });
     constraints_.add({
@@ -644,13 +669,21 @@ void HexacopterArchitecture::bindCanonicalParameters() {
     Tmax_parameter_ = parameters_.find(id_ + "::T_max");
     cT_parameter_ = parameters_.find(id_ + "::cT");
     dprop_parameter_ = parameters_.find(id_ + "::d_prop");
-    payload_parameter_ = parameters_.find(id_ + "::m_payload");
     r_o_parameter_ = parameters_.find(id_ + "::arm_outer_radius");
     t_wall_parameter_ = parameters_.find(id_ + "::arm_wall_thickness");
-    mbat_parameter_     = parameters_.find(id_ + "::m_bat");
-    zbatoff_parameter_  = parameters_.find(id_ + "::z_bat_offset");
-    xpayload_parameter_ = parameters_.find(id_ + "::x_payload");
-    ypayload_parameter_ = parameters_.find(id_ + "::y_payload");
+    mbat_parameter_         = parameters_.find(id_ + "::m_bat");
+    m_pax_parameter_        = parameters_.find(id_ + "::m_pax");
+    m_cargo_parameter_      = parameters_.find(id_ + "::m_cargo");
+    m_instrument_parameter_ = parameters_.find(id_ + "::m_instrument");
+    pax_x_parameter_        = parameters_.find(id_ + "::pax_x");
+    pax_y_parameter_        = parameters_.find(id_ + "::pax_y");
+    pax_z_parameter_        = parameters_.find(id_ + "::pax_z");
+    cargo_x_parameter_      = parameters_.find(id_ + "::cargo_x");
+    cargo_y_parameter_      = parameters_.find(id_ + "::cargo_y");
+    cargo_z_parameter_      = parameters_.find(id_ + "::cargo_z");
+    bat_x_parameter_        = parameters_.find(id_ + "::bat_x");
+    bat_y_parameter_        = parameters_.find(id_ + "::bat_y");
+    bat_z_parameter_        = parameters_.find(id_ + "::bat_z");
 }
 
 void HexacopterArchitecture::rebuildElements() {
@@ -661,27 +694,31 @@ void HexacopterArchitecture::rebuildElements() {
         Tmax_parameter_,
         cT_parameter_,
         dprop_parameter_,
-        payload_parameter_,
+        m_pax_parameter_,
+        m_cargo_parameter_,
+        m_instrument_parameter_,
         r_o_parameter_,
         t_wall_parameter_,
-        mbat_parameter_
+        mbat_parameter_,
+        pax_x_parameter_,
+        pax_y_parameter_,
+        pax_z_parameter_,
+        cargo_x_parameter_,
+        cargo_y_parameter_,
+        cargo_z_parameter_,
+        bat_x_parameter_,
+        bat_y_parameter_,
+        bat_z_parameter_
     });
 
-    // CabinEnvelopeElement and OccupantEnvelopeElement inserted after buildElements()
-    // so they appear between battery and payload without DefaultHexacopterBuilder changes.
-    const auto payload_it = std::find_if(elements_.begin(), elements_.end(),
-        [](const SpatialElementPtr& e) { return e->id() == "payload"; });
-    elements_.insert(payload_it, std::make_unique<CabinEnvelopeElement>("cabin_envelope"));
+    // CabinEnvelopeElement and OccupantEnvelopeElement inserted before passenger element.
+    const auto passenger_it = std::find_if(elements_.begin(), elements_.end(),
+        [](const SpatialElementPtr& e) { return e->id() == "passenger"; });
+    elements_.insert(passenger_it, std::make_unique<CabinEnvelopeElement>("cabin_envelope"));
     elements_.insert(
         std::find_if(elements_.begin(), elements_.end(),
-            [](const SpatialElementPtr& e) { return e->id() == "payload"; }),
+            [](const SpatialElementPtr& e) { return e->id() == "passenger"; }),
         std::make_unique<OccupantEnvelopeElement>("occupant_envelope"));
-
-    // KeepOutZoneElements: one per motor, representing the rotor swept disk volume.
-    for (int index = 0; index < 6; ++index) {
-        elements_.push_back(std::make_unique<KeepOutZoneElement>(
-            "keepout_" + std::to_string(index + 1), dprop_parameter_));
-    }
 
     for (auto& element : elements_) {
         element->registerParameters(parameters_);
@@ -700,14 +737,24 @@ void HexacopterArchitecture::rebuildAttachments() {
         Tmax_parameter_,
         cT_parameter_,
         dprop_parameter_,
-        payload_parameter_,
+        m_pax_parameter_,
+        m_cargo_parameter_,
+        m_instrument_parameter_,
         r_o_parameter_,
         t_wall_parameter_,
-        mbat_parameter_
+        mbat_parameter_,
+        pax_x_parameter_,
+        pax_y_parameter_,
+        pax_z_parameter_,
+        cargo_x_parameter_,
+        cargo_y_parameter_,
+        cargo_z_parameter_,
+        bat_x_parameter_,
+        bat_y_parameter_,
+        bat_z_parameter_
     });
 
     // Cabin envelope centred inside body hull (body "center" anchor = body origin).
-    // Body half-height (1.00 m) > cabin half-Z (0.90 m) → cabin always fits inside body.
     attachments_.push_back({"body", "cabin_envelope", "center", "center",
         AttachmentRelationship::localOffset({0.0, 0.0, 0.0}),
         true, "", AttachmentContactPolicy::bonded_overlap, nullptr});
@@ -715,22 +762,6 @@ void HexacopterArchitecture::rebuildAttachments() {
     attachments_.push_back({"cabin_envelope", "occupant_envelope", "center", "center",
         AttachmentRelationship::localOffset({0.0, 0.0, 0.0}),
         true, "", AttachmentContactPolicy::bonded_overlap, nullptr});
-
-    // KeepOutZone elements sit at the motor axis — same position as the rotor disk.
-    for (int index = 0; index < 6; ++index) {
-        const std::string slot = std::to_string(index + 1);
-        attachments_.push_back({
-            "motor_" + slot,
-            "keepout_" + slot,
-            "axis",
-            "center",
-            AttachmentRelationship::rigidMount(),
-            true,
-            "",
-            AttachmentContactPolicy::bonded_overlap,
-            nullptr
-        });
-    }
 }
 
 void HexacopterArchitecture::assemble() {

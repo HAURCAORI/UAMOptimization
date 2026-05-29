@@ -47,8 +47,17 @@ std::vector<SpatialElementPtr> DefaultHexacopterBuilder::buildElements(const Def
     std::vector<SpatialElementPtr> elements;
     elements.push_back(std::make_unique<BodyHullElement>("body", parameters.Lx, parameters.Lyi, parameters.Lyo));
     elements.push_back(std::make_unique<BodyFrameElement>("body_frame"));
-    elements.push_back(std::make_unique<BatteryElement>("battery", parameters.m_bat, parameters.Tmax, parameters.dprop));
-    elements.push_back(std::make_unique<PayloadElement>("payload", parameters.payload));
+    elements.push_back(std::make_unique<BatteryElement>(
+        "battery", parameters.m_bat,
+        parameters.bat_x, parameters.bat_y, parameters.bat_z));
+    elements.push_back(std::make_unique<PassengerElement>(
+        "passenger", parameters.m_pax,
+        parameters.pax_x, parameters.pax_y, parameters.pax_z));
+    elements.push_back(std::make_unique<CargoElement>(
+        "cargo", parameters.m_cargo,
+        parameters.cargo_x, parameters.cargo_y, parameters.cargo_z));
+    elements.push_back(std::make_unique<InstrumentPanelElement>(
+        "instrument_panel", parameters.m_instrument));
 
     for (int index = 0; index < 6; ++index) {
         elements.push_back(std::make_unique<ArmElement>(
@@ -72,28 +81,29 @@ std::vector<Attachment> DefaultHexacopterBuilder::buildAttachments(const Default
         AttachmentRelationship::rigidMount(), true, "",
         AttachmentContactPolicy::bonded_overlap, nullptr
     });
-    // Battery: base offset 0.30 m from body bottom (z=-1.00 m) → center z=-0.70 m at z_bat_offset=0,
-    // giving 0.06 m clearance from cabin floor (z=-0.90 m). z_bat_offset DOF shifts from baseline.
+    // Battery / passenger / cargo / instrument: rigid mounts to body center.
+    // Each element owns its placement variables and encodes them in local_pose_ so
+    // the assembled world position = body_world_pose * local_pose_ (no attachment lambda needed).
     attachments.push_back({
-        "body", "battery", "bottom", "mount",
-        AttachmentRelationship::rigidMount(), true, "central",
-        AttachmentContactPolicy::bonded_overlap,
-        [](const HexacopterArchitecture& arch) {
-            Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
-            pose.translation() = Eigen::Vector3d(0.0, 0.0, 0.30 + arch.batteryZOffset());
-            return pose;
-        }
+        "body", "battery", "center", "mount",
+        AttachmentRelationship::rigidMount(), true, "",
+        AttachmentContactPolicy::bonded_overlap, nullptr
     });
-    // Payload: centered inside fuselage by default; x_payload/y_payload DOFs shift in horizontal plane.
     attachments.push_back({
-        "body", "payload", "center", "center",
-        AttachmentRelationship::rigidMount(), true, "central",
-        AttachmentContactPolicy::bonded_overlap,
-        [](const HexacopterArchitecture& arch) {
-            Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
-            pose.translation() = Eigen::Vector3d(arch.payloadXOffset(), arch.payloadYOffset(), 0.0);
-            return pose;
-        }
+        "body", "passenger", "center", "center",
+        AttachmentRelationship::rigidMount(), true, "",
+        AttachmentContactPolicy::bonded_overlap, nullptr
+    });
+    attachments.push_back({
+        "body", "cargo", "center", "center",
+        AttachmentRelationship::rigidMount(), true, "",
+        AttachmentContactPolicy::bonded_overlap, nullptr
+    });
+    // Instrument panel fixed position is owned by InstrumentPanelElement::local_pose_.
+    attachments.push_back({
+        "body", "instrument_panel", "center", "center",
+        AttachmentRelationship::rigidMount(), true, "",
+        AttachmentContactPolicy::bonded_overlap, nullptr
     });
 
     for (int index = 0; index < 6; ++index) {

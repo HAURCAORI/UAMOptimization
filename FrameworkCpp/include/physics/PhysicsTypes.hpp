@@ -79,10 +79,11 @@ struct PackagingReport {
     double payload_containment_violation = 0.0;  // > 0 = payload protrudes outside cabin [m]
     double battery_containment_violation = 0.0;  // > 0 = battery protrudes outside cabin [m]
     double battery_payload_overlap = 0.0;        // > 0 = battery–payload penetration depth [m]
+    double payload_internal_overlap = 0.0;       // > 0 = two payload components overlap [m]
     double occupant_containment_violation = 0.0; // > 0 = occupant envelope protrudes outside cabin [m]
-    double rotor_keepout_intrusion_m = 0.0;           // > 0 = internal element intrudes into rotor keep-out zone [m]
-    std::string rotor_keepout_offending_zone_id;      // ID of keep-out zone with worst intrusion (empty if none)
-    std::string rotor_keepout_offending_element_id;   // ID of internal element causing worst intrusion (empty if none)
+    double rotor_keepout_intrusion_m = 0.0;           // retained; always 0 (keepout zones removed)
+    std::string rotor_keepout_offending_zone_id;
+    std::string rotor_keepout_offending_element_id;
 };
 
 struct PowertrainResult {

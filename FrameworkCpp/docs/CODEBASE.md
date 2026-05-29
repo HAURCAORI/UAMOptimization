@@ -11,12 +11,26 @@ Update the relevant section after completing an implementation.
 FrameworkCpp/
 ├── app/
 │   └── main.cpp                    CLI entry point (eval/soo/moo/compare/visualize modes)
+├── data/
+│   ├── example_flight_data.csv     Synthetic hover + cruise data for calibration smoke-tests
+│   └── example_mission_profile.json  City-taxi round-trip profile (12 segments)
+├── tools/
+│   └── run_demo.ps1                One-click demo: eval / mission / calibrate / soo+mission
 ├── include/
 │   ├── analysis/
 │   │   ├── AcsPlotter.hpp          SVG-based ACS visualization (no external deps)
 │   │   ├── ComparisonReporter.hpp  Console summary and table helpers
 │   │   ├── CsvExporter.hpp         All file export declarations
 │   │   └── ParetoAnalyzer.hpp      Knee point and dominance analysis
+│   ├── calibration/
+│   │   ├── CalibrationProblem.hpp  Residual cost + pack/unpack helpers; wraps FlightDataPoints
+│   │   ├── Calibrator.hpp          Nelder–Mead box-projected optimizer; CalibrationOutcome
+│   │   ├── FlightData.hpp          loadFlightDataCsv() — CSV parser returning FlightDataPoints
+│   │   └── FlightDataPoint.hpp     One measured operating point (hover or cruise)
+│   ├── mission/
+│   │   ├── CruisePowerModel.hpp    Forward-flight power (momentum-theory + parasite drag)
+│   │   ├── MissionEvaluator.hpp    Multi-segment UAM mission energy evaluator; MissionResult
+│   │   └── MissionProfile.hpp      MissionProfile / MissionSegment structs + JSON loader
 │   ├── core/
 │   │   ├── AppliedLoad.hpp         AppliedLoad struct + ILoadReceiver interface
 │   │   ├── AssemblyState.hpp       Computed assembly: element positions/orientations
@@ -117,13 +131,30 @@ FrameworkCpp/
 | `IMotorMassContributor` | `motorMass()` | MotorElement |
 | `IPayloadMassContributor` | `payloadMass()` | PayloadElement |
 
+### `MissionEvaluator` (mission)
+Evaluates a multi-segment UAM mission (hover, cruise, climb, descent, emergency_hover,
+reserve_hover) and returns a `MissionResult` with per-segment energy and range breakdown.
+Hover legs reuse the ACS trim thrusts from `PowertrainResult`; cruise/climb/descent legs
+delegate to `CruisePowerModel`. Called from `Stage1Evaluator` when `context.mission_profile`
+is set. `BatteryEvaluator::evaluateWithMission()` then uses the result instead of the legacy
+fixed-time hover legs. Key context fields: `parasite_drag_area_m2`, `air_density`.
+
+### `Calibrator` (calibration)
+Nelder–Mead box-projected optimizer that identifies physics parameters
+(`figure_of_merit`, `motor_efficiency`, `esc_efficiency`, `battery_specific_energy_wh_per_kg`,
+`battery_pack_efficiency`, `parasite_drag_area_m2`) from flight-log CSVs. Residual =
+mean-squared relative error in electrical power (hover: actuator-disk; cruise: CruisePowerModel).
+Use `applyToContext()` to push fitted values into an `EvaluationContext` before a run.
+
 ### `Stage1Evaluator` (evaluation)
 Evaluation pipeline in order:
 1. `VehicleScalingModel::evaluate()` → fills `PhysicalModel` (mass now includes m_bat, propulsion, packaging)
 2. `AttainableControlSetAnalyzer::analyze()` → fills `AcsResult` (trim, directional margins,
    volume metrics, per-axis reserves, fault degradation ratio)
 3. **`PowertrainEvaluator::evaluate()`** (Phase 2) → fills `PowertrainResult` (motor power [W], utilizations)
-4. **`BatteryEvaluator::evaluate()`** (Phase 2) → fills `BatteryResult` (energy [Wh], reserve fraction, C-rate)
+4. **`BatteryEvaluator::evaluate/evaluateWithMission()`** (Phase 2) → fills `BatteryResult`. If
+   `context.mission_profile` is set, runs `MissionEvaluator` first and uses `evaluateWithMission()`;
+   otherwise falls back to the legacy fixed-time hover budget. Sets `stage1.mission_*` fields.
 5. **`StructuralNetworkAnalyzer::analyze()`** (Phase 3) → fills `network_structural` (per-member per-load-case),
    `structural.min_safety_factor`, `structural.network_*` fields. Uses ACS fault trims as load cases.
 6. Computes `Stage1Metrics` from `PhysicalModel` + `AcsResult` + `PowertrainResult` + `BatteryResult`
@@ -299,6 +330,21 @@ Active parameter count for optimizer: **10**
 | `bat_energy_reserve_fraction` | — | (E_avail − E_req) / E_avail; ≥0 = feasible |
 | `bat_c_rate` | 1/h | P_peak / E_avail (voltage-invariant C-rate) |
 | `bat_mass_fraction` | — | m_bat / m_total ∈ [0,1] |
+| `bat_achievable_endurance_nom_min` | min | E_avail / (P_nom + P_aux) × 60; actual hover time |
+
+### Mission profile metrics (when `context.mission_profile` is set)
+| Field | Unit | Description |
+|---|---|---|
+| `mission_active` | bool | true when mission profile was evaluated |
+| `mission_total_time_s` | s | total mission duration |
+| `mission_total_distance_m` | m | total distance flown |
+| `mission_cruise_distance_m` | m | cruise/climb/descent legs only |
+| `mission_total_energy_wh` | Wh | propulsion energy only |
+| `mission_energy_with_aux_wh` | Wh | propulsion + auxiliary |
+| `mission_peak_power_w` | W | max per-segment electrical power |
+| `mission_hover_energy_wh` | Wh | hover/emergency/reserve energy |
+| `mission_cruise_energy_wh` | Wh | cruise/climb/descent energy |
+| `mission_energy_reserve_fraction` | — | (E_avail − E_with_aux) / E_avail |
 
 ### Structural network metrics (Phase 3)
 | Field | Unit | Description |

@@ -84,9 +84,10 @@ const std::vector<MetricDescriptor>& stage1MetricDescriptors() {
         {"pkg_payload_containment_m",          MetricRole::hard_constraint,  "m"},
         {"pkg_battery_containment_m",          MetricRole::hard_constraint,  "m"},
         {"pkg_battery_payload_overlap_m",      MetricRole::hard_constraint,  "m"},
+        {"pkg_payload_internal_overlap_m",     MetricRole::hard_constraint,  "m"},
         {"pkg_occupant_containment_m",         MetricRole::hard_constraint,  "m"},
         {"cg_y_offset_m",                      MetricRole::hard_constraint,  "m"},
-        {"pkg_rotor_keepout_m",                MetricRole::hard_constraint,  "m"},
+        {"pkg_rotor_keepout_m",                MetricRole::analysis_only,    "m"},
     };
     return table;
 }

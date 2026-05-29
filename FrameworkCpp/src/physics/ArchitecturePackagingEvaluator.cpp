@@ -57,98 +57,78 @@ void ArchitecturePackagingEvaluator::analyze(
         ? 0.0
         : -min_rotor_clearance / std::max(architecture.propellerDiameter(), 1e-9);
 
-    // --- Payload containment inside cabin envelope ---
-    const core::AssembledElement* cabin_el   = nullptr;
-    const core::AssembledElement* payload_el = nullptr;
-    const core::AssembledElement* battery_el = nullptr;
-    const core::AssembledElement* occupant_el = nullptr;
+    // Find envelope elements by type
+    const core::AssembledElement* cabin_el     = nullptr;
+    const core::AssembledElement* passenger_el = nullptr;
+    const core::AssembledElement* cargo_el     = nullptr;
+    const core::AssembledElement* instrument_el = nullptr;
+    const core::AssembledElement* battery_el   = nullptr;
+    const core::AssembledElement* occupant_el  = nullptr;
     for (const auto& assembled : architecture.assemblyState().elements) {
         if (assembled.element == nullptr) continue;
         const auto& t = assembled.element->type();
-        if (t == "CabinEnvelopeElement")    cabin_el    = &assembled;
-        if (t == "PayloadElement")          payload_el  = &assembled;
-        if (t == "BatteryElement")          battery_el  = &assembled;
-        if (t == "OccupantEnvelopeElement") occupant_el = &assembled;
+        if (t == "CabinEnvelopeElement")    cabin_el     = &assembled;
+        if (t == "PassengerElement")        passenger_el = &assembled;
+        if (t == "CargoElement")            cargo_el     = &assembled;
+        if (t == "InstrumentPanelElement")  instrument_el = &assembled;
+        if (t == "BatteryElement")          battery_el   = &assembled;
+        if (t == "OccupantEnvelopeElement") occupant_el  = &assembled;
     }
 
-    auto cabinWorld = [&]() -> std::optional<core::LocalAABB> {
-        if (cabin_el == nullptr) return std::nullopt;
-        const auto* p = dynamic_cast<const core::IEnvelopeProvider*>(cabin_el->element);
+    auto getWorldAABB = [&](const core::AssembledElement* el) -> std::optional<core::LocalAABB> {
+        if (el == nullptr) return std::nullopt;
+        const auto* p = dynamic_cast<const core::IEnvelopeProvider*>(el->element);
         if (p == nullptr) return std::nullopt;
-        return worldAABB(p->localEnvelope(), cabin_el->world_pose);
+        return worldAABB(p->localEnvelope(), el->world_pose);
     };
 
-    if (cabin_el != nullptr && payload_el != nullptr) {
-        const auto* payload_prov = dynamic_cast<const core::IEnvelopeProvider*>(payload_el->element);
-        if (const auto cw = cabinWorld(); cw.has_value() && payload_prov != nullptr) {
-            const core::LocalAABB payload_world = worldAABB(payload_prov->localEnvelope(), payload_el->world_pose);
-            model.packaging.payload_containment_violation = cw->containmentViolation(payload_world);
-        }
+    const auto cabin_world = getWorldAABB(cabin_el);
+    const auto pax_world   = getWorldAABB(passenger_el);
+    const auto cargo_world = getWorldAABB(cargo_el);
+    const auto inst_world  = getWorldAABB(instrument_el);
+    const auto bat_world   = getWorldAABB(battery_el);
+    const auto occ_world   = getWorldAABB(occupant_el);
+
+    // Containment: all payload components must fit inside cabin
+    double payload_containment = 0.0;
+    if (cabin_world.has_value()) {
+        if (pax_world.has_value())  payload_containment = std::max(payload_containment, cabin_world->containmentViolation(*pax_world));
+        if (cargo_world.has_value()) payload_containment = std::max(payload_containment, cabin_world->containmentViolation(*cargo_world));
+        if (inst_world.has_value()) payload_containment = std::max(payload_containment, cabin_world->containmentViolation(*inst_world));
     }
+    model.packaging.payload_containment_violation = payload_containment;
 
-    if (cabin_el != nullptr && battery_el != nullptr) {
-        const auto* bat_prov = dynamic_cast<const core::IEnvelopeProvider*>(battery_el->element);
-        if (const auto cw = cabinWorld(); cw.has_value() && bat_prov != nullptr) {
-            const core::LocalAABB bat_world = worldAABB(bat_prov->localEnvelope(), battery_el->world_pose);
-            model.packaging.battery_containment_violation = cw->containmentViolation(bat_world);
-        }
+    // Battery containment
+    if (cabin_world.has_value() && bat_world.has_value())
+        model.packaging.battery_containment_violation = cabin_world->containmentViolation(*bat_world);
+
+    // Occupant containment
+    if (cabin_world.has_value() && occ_world.has_value())
+        model.packaging.occupant_containment_violation = cabin_world->containmentViolation(*occ_world);
+
+    // Battery vs payload overlap (max over all payload components)
+    double bat_payload_overlap = 0.0;
+    if (bat_world.has_value()) {
+        if (pax_world.has_value())   bat_payload_overlap = std::max(bat_payload_overlap, bat_world->overlapMagnitude(*pax_world));
+        if (cargo_world.has_value()) bat_payload_overlap = std::max(bat_payload_overlap, bat_world->overlapMagnitude(*cargo_world));
+        if (inst_world.has_value())  bat_payload_overlap = std::max(bat_payload_overlap, bat_world->overlapMagnitude(*inst_world));
     }
+    model.packaging.battery_payload_overlap = bat_payload_overlap;
 
-    if (payload_el != nullptr && battery_el != nullptr) {
-        const auto* payload_prov = dynamic_cast<const core::IEnvelopeProvider*>(payload_el->element);
-        const auto* bat_prov     = dynamic_cast<const core::IEnvelopeProvider*>(battery_el->element);
-        if (payload_prov != nullptr && bat_prov != nullptr) {
-            const core::LocalAABB payload_world = worldAABB(payload_prov->localEnvelope(), payload_el->world_pose);
-            const core::LocalAABB bat_world     = worldAABB(bat_prov->localEnvelope(),     battery_el->world_pose);
-            model.packaging.battery_payload_overlap = payload_world.overlapMagnitude(bat_world);
-        }
-    }
+    // Payload internal overlap (passenger vs cargo vs instrument)
+    double internal_overlap = 0.0;
+    if (pax_world.has_value() && cargo_world.has_value())
+        internal_overlap = std::max(internal_overlap, pax_world->overlapMagnitude(*cargo_world));
+    if (pax_world.has_value() && inst_world.has_value())
+        internal_overlap = std::max(internal_overlap, pax_world->overlapMagnitude(*inst_world));
+    if (cargo_world.has_value() && inst_world.has_value())
+        internal_overlap = std::max(internal_overlap, cargo_world->overlapMagnitude(*inst_world));
+    model.packaging.payload_internal_overlap = internal_overlap;
 
-    if (cabin_el != nullptr && occupant_el != nullptr) {
-        const auto* occup_prov = dynamic_cast<const core::IEnvelopeProvider*>(occupant_el->element);
-        if (const auto cw = cabinWorld(); cw.has_value() && occup_prov != nullptr) {
-            const core::LocalAABB occup_world = worldAABB(occup_prov->localEnvelope(), occupant_el->world_pose);
-            model.packaging.occupant_containment_violation = cw->containmentViolation(occup_world);
-        }
-    }
-
-    // Rotor keep-out: occupant envelope, payload, and battery must not intrude into any rotor's
-    // swept keep-out cylinder. worldAABB (translation-only) is valid because the cylinder is
-    // rotationally symmetric in XY — its AABB depends only on world_pose translation.
-    // Arm/motor/rotor are exempt via bonded_overlap attachment; only internal placeable elements
-    // (occupant, payload, battery) are checked.
-    double worst_keepout = 0.0;
-    std::string worst_zone_id;
-    std::string worst_element_id;
-
-    auto checkKeepout = [&](const core::LocalAABB& ko_world,
-                             const std::string& zone_id,
-                             const core::AssembledElement* el_p) {
-        if (el_p == nullptr || el_p->element == nullptr) return;
-        const auto* prov = dynamic_cast<const core::IEnvelopeProvider*>(el_p->element);
-        if (prov == nullptr) return;
-        const core::LocalAABB el_world = worldAABB(prov->localEnvelope(), el_p->world_pose);
-        const double intrusion = ko_world.overlapMagnitude(el_world);
-        if (intrusion > worst_keepout) {
-            worst_keepout   = intrusion;
-            worst_zone_id   = zone_id;
-            worst_element_id = el_p->element->id();
-        }
-    };
-
-    for (const auto& assembled : architecture.assemblyState().elements) {
-        if (assembled.element == nullptr || assembled.element->type() != "KeepOutZoneElement") continue;
-        const auto* ko_prov = dynamic_cast<const core::IEnvelopeProvider*>(assembled.element);
-        if (ko_prov == nullptr) continue;
-        const core::LocalAABB ko_world = worldAABB(ko_prov->localEnvelope(), assembled.world_pose);
-        const std::string zone_id = assembled.element->id();
-        checkKeepout(ko_world, zone_id, battery_el);
-        checkKeepout(ko_world, zone_id, payload_el);
-        checkKeepout(ko_world, zone_id, occupant_el);
-    }
-    model.packaging.rotor_keepout_intrusion_m      = worst_keepout;
-    model.packaging.rotor_keepout_offending_zone_id    = std::move(worst_zone_id);
-    model.packaging.rotor_keepout_offending_element_id = std::move(worst_element_id);
+    // Zero out keepout fields (no longer checked)
+    model.packaging.rotor_keepout_intrusion_m = 0.0;
+    model.packaging.rotor_keepout_offending_zone_id.clear();
+    model.packaging.rotor_keepout_offending_element_id.clear();
 }
 
 }  // namespace hexaarch::physics

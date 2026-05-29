@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "evaluation/EvaluationContext.hpp"
+#include "mission/MissionEvaluator.hpp"
 
 namespace hexaarch::physics {
 
@@ -47,6 +48,53 @@ BatteryResult BatteryEvaluator::evaluate(
 
     result.mass_fraction =
         battery_mass_kg / std::max(total_vehicle_mass_kg, 1e-9);
+
+    return result;
+}
+
+BatteryResult BatteryEvaluator::evaluateWithMission(
+    const PowertrainResult& powertrain,
+    const mission::MissionResult& mission_result,
+    const double battery_mass_kg,
+    const double total_vehicle_mass_kg,
+    const evaluation::EvaluationContext& context) const {
+
+    BatteryResult result;
+
+    result.available_energy_wh =
+        context.battery_pack_efficiency
+        * context.battery_dod_usable
+        * battery_mass_kg
+        * context.battery_specific_energy_wh_per_kg;
+
+    // Mission energy already includes auxiliary draw via MissionEvaluator.
+    result.required_energy_total_wh = mission_result.total_energy_with_aux_wh;
+
+    // Split nominal vs. emergency for backwards-compatible reporting: hover/cruise legs feed the
+    // nominal bucket, emergency_hover legs feed the fault bucket. reserve_hover is also nominal.
+    double nominal = 0.0;
+    double fault = 0.0;
+    for (const auto& seg : mission_result.segments) {
+        if (seg.kind == mission::SegmentKind::emergency_hover) {
+            fault += seg.energy_wh;
+        } else {
+            nominal += seg.energy_wh;
+        }
+    }
+    // Distribute auxiliary draw proportionally to time (already lumped in total_with_aux).
+    const double aux_wh = mission_result.total_energy_with_aux_wh - mission_result.total_energy_wh;
+    result.required_energy_nominal_wh = nominal + aux_wh;
+    result.required_energy_fault_wh   = fault;
+
+    const double E_avail = std::max(result.available_energy_wh, 1e-9);
+    result.energy_reserve_fraction =
+        (result.available_energy_wh - result.required_energy_total_wh) / E_avail;
+
+    // Peak C-rate uses the worst per-segment electrical power (still adds aux draw).
+    const double P_peak = mission_result.peak_power_w + context.power_auxiliary_w;
+    result.c_rate = P_peak / E_avail;
+
+    result.mass_fraction = battery_mass_kg / std::max(total_vehicle_mass_kg, 1e-9);
 
     return result;
 }

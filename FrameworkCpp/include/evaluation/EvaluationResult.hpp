@@ -85,6 +85,20 @@ struct Stage1Metrics {
     double bat_mass_fraction = 0.0;            // m_bat / m_total ∈ [0,1]
     double bat_achievable_endurance_nom_min = 0.0;  // E_avail / (P_nom + P_aux) × 60 [min]; actual flyable time at nominal hover
 
+    // Multi-mission profile (when EvaluationContext.mission_profile is set). Mirrors the
+    // hover-only fields above for the active profile so SOO/MOO objectives can use either.
+    // Defaults to zero when no profile is supplied (legacy hover-only sizing is in bat_*).
+    bool   mission_active = false;
+    double mission_total_time_s = 0.0;
+    double mission_total_distance_m = 0.0;
+    double mission_cruise_distance_m = 0.0;
+    double mission_total_energy_wh = 0.0;        // propulsion-only [Wh]
+    double mission_energy_with_aux_wh = 0.0;     // propulsion + auxiliary [Wh]
+    double mission_peak_power_w = 0.0;           // max per-segment electrical power [W]
+    double mission_hover_energy_wh = 0.0;
+    double mission_cruise_energy_wh = 0.0;
+    double mission_energy_reserve_fraction = 0.0;  // (E_avail - E_with_aux) / E_avail
+
     // Phase 3: Structural network (multi-load-case von Mises analysis — A/C in spec)
     double struct_net_min_safety_factor = 0.0;    // worst SF over all members × load cases
     double struct_net_max_tip_deflection_m = 0.0; // worst arm tip deflection [m]
@@ -98,9 +112,10 @@ struct Stage1Metrics {
     double pkg_payload_containment_m = 0.0;       // > 0 = payload protrudes outside cabin [m]
     double pkg_battery_containment_m = 0.0;       // > 0 = battery protrudes outside cabin [m]
     double pkg_battery_payload_overlap_m = 0.0;   // > 0 = battery–payload penetration [m]
+    double pkg_payload_internal_overlap_m = 0.0;  // > 0 = passenger/cargo/instrument overlap [m]
     double pkg_occupant_containment_m = 0.0;      // > 0 = occupant envelope protrudes outside cabin [m]
     double cg_y_offset_m = 0.0;                   // |lateral CG offset| from centerline [m]
-    double pkg_rotor_keepout_m = 0.0;             // > 0 = occupant/payload/battery intrudes into rotor keep-out cylinder [m]
+    double pkg_rotor_keepout_m = 0.0;             // retained; always 0 (keepout zones removed)
 };
 
 struct EvaluationResult {
