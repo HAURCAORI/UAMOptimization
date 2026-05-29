@@ -20,6 +20,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="vcpkg.json" />
+    <None Include="data\example_flight_data.csv" />
+    <None Include="data\example_mission_profile.json" />
+    <None Include="tools\run_demo.ps1" />
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="visualization\shaders\primitive.frag">
@@ -77,6 +80,12 @@
     <ClCompile Include="src\physics\AttainableControlSetAnalyzer.cpp" />
     <ClCompile Include="src\physics\BatteryEvaluator.cpp" />
     <ClCompile Include="src\physics\PhysicsTypes.cpp" />
+    <ClCompile Include="src\calibration\CalibrationProblem.cpp" />
+    <ClCompile Include="src\calibration\Calibrator.cpp" />
+    <ClCompile Include="src\calibration\FlightData.cpp" />
+    <ClCompile Include="src\mission\CruisePowerModel.cpp" />
+    <ClCompile Include="src\mission\MissionEvaluator.cpp" />
+    <ClCompile Include="src\mission\MissionProfile.cpp" />
     <ClCompile Include="src\physics\ArchitecturePackagingEvaluator.cpp" />
     <ClCompile Include="src\physics\PowertrainEvaluator.cpp" />
     <ClCompile Include="src\physics\PrimitiveDistance.cpp" />
@@ -91,6 +100,13 @@
     <ClCompile Include="visualization\src\visualization\ViewerCamera.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="include\calibration\CalibrationProblem.hpp" />
+    <ClInclude Include="include\calibration\Calibrator.hpp" />
+    <ClInclude Include="include\calibration\FlightData.hpp" />
+    <ClInclude Include="include\calibration\FlightDataPoint.hpp" />
+    <ClInclude Include="include\mission\CruisePowerModel.hpp" />
+    <ClInclude Include="include\mission\MissionEvaluator.hpp" />
+    <ClInclude Include="include\mission\MissionProfile.hpp" />
     <ClInclude Include="include\analysis\AcsPlotter.hpp" />
     <ClInclude Include="include\analysis\ComparisonReporter.hpp" />
     <ClInclude Include="include\analysis\CsvExporter.hpp" />
