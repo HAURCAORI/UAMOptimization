@@ -51,6 +51,7 @@ std::vector<MeshData> loadGltfMeshes(const fs::path& gltf_path, const float scal
 
             const int pos_acc  = attrs["POSITION"].get<int>();
             const int norm_acc = attrs["NORMAL"].get<int>();
+            const int uv_acc   = attrs.contains("TEXCOORD_0") ? attrs["TEXCOORD_0"].get<int>() : -1;
             const int idx_acc  = prim["indices"].get<int>();
 
             const int vtx_count  = doc["accessors"][pos_acc]["count"].get<int>();
@@ -59,9 +60,11 @@ std::vector<MeshData> loadGltfMeshes(const fs::path& gltf_path, const float scal
 
             const auto* pos_ptr  = accessorPtr(pos_acc);
             const auto* norm_ptr = accessorPtr(norm_acc);
+            const auto* uv_ptr   = uv_acc >= 0 ? accessorPtr(uv_acc) : nullptr;
             const auto* idx_ptr  = accessorPtr(idx_acc);
             const int pos_stride  = accessorStride(pos_acc,  12);
             const int norm_stride = accessorStride(norm_acc, 12);
+            const int uv_stride   = uv_acc >= 0 ? accessorStride(uv_acc, 8) : 0;
 
             MeshData data;
             data.vertices.reserve(static_cast<std::size_t>(vtx_count));
@@ -81,6 +84,12 @@ std::vector<MeshData> loadGltfMeshes(const fs::path& gltf_path, const float scal
                 std::memcpy(&nx, norm_ptr + i * norm_stride,       4);
                 std::memcpy(&ny, norm_ptr + i * norm_stride + 4,   4);
                 std::memcpy(&nz, norm_ptr + i * norm_stride + 8,   4);
+                float u = 0.0f;
+                float vtex = 0.0f;
+                if (uv_ptr != nullptr) {
+                    std::memcpy(&u,    uv_ptr + i * uv_stride,     4);
+                    std::memcpy(&vtex, uv_ptr + i * uv_stride + 4, 4);
+                }
 
                 MeshVertex v;
                 if (remap_y_to_z) {
@@ -92,6 +101,7 @@ std::vector<MeshData> loadGltfMeshes(const fs::path& gltf_path, const float scal
                     v.position = {px * scale, py * scale, pz * scale};
                     v.normal   = {nx, ny, nz};
                 }
+                v.texcoord = {u, vtex};
                 data.vertices.push_back(v);
             }
 

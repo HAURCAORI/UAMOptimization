@@ -67,3 +67,9 @@ CppFramework
 FrameworkCpp/x64
 FrameworkCpp/FrameworkCpp
 FrameworkCpp/output
+
+.claude/
+.claude/settings.local.json
+FrameworkCpp/imgui.ini
+
+output

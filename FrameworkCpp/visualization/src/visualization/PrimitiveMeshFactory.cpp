@@ -15,7 +15,7 @@ MeshVertex makeVertex(
     const float nx,
     const float ny,
     const float nz) {
-    return {{{px, py, pz}}, {{nx, ny, nz}}};
+    return {{{px, py, pz}}, {{nx, ny, nz}}, {{0.0f, 0.0f}}};
 }
 
 void appendTriangle(

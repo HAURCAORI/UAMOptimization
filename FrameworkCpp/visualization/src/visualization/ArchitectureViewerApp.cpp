@@ -42,6 +42,8 @@
 #endif
 #if defined(_WIN32)
 #include <Windows.h>
+#include <wincodec.h>
+#pragma comment(lib, "windowscodecs.lib")
 #endif
 #endif
 
@@ -148,11 +150,26 @@ struct BufferResource {
     VkDeviceSize size = 0;
 };
 
+struct TextureResource {
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    VkSampler sampler = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, kFramesInFlight> descriptor_sets{};
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+
+    [[nodiscard]] bool valid() const {
+        return image != VK_NULL_HANDLE && view != VK_NULL_HANDLE && sampler != VK_NULL_HANDLE;
+    }
+};
+
 struct MeshResource {
     BufferResource vertex_buffer;
     BufferResource index_buffer;
     std::uint32_t index_count = 0;
     std::string material_name;
+    std::array<VkDescriptorSet, kFramesInFlight> descriptor_sets{};
 };
 
 struct FrameResources {
@@ -395,8 +412,8 @@ VkVertexInputBindingDescription vertexBindingDescription() {
     return binding;
 }
 
-std::array<VkVertexInputAttributeDescription, 2> vertexAttributeDescriptions() {
-    std::array<VkVertexInputAttributeDescription, 2> attributes{};
+std::array<VkVertexInputAttributeDescription, 3> vertexAttributeDescriptions() {
+    std::array<VkVertexInputAttributeDescription, 3> attributes{};
     attributes[0].location = 0;
     attributes[0].binding = 0;
     attributes[0].format = VK_FORMAT_R32G32B32_SFLOAT;
@@ -406,6 +423,11 @@ std::array<VkVertexInputAttributeDescription, 2> vertexAttributeDescriptions() {
     attributes[1].binding = 0;
     attributes[1].format = VK_FORMAT_R32G32B32_SFLOAT;
     attributes[1].offset = static_cast<std::uint32_t>(offsetof(MeshVertex, normal));
+
+    attributes[2].location = 2;
+    attributes[2].binding = 0;
+    attributes[2].format = VK_FORMAT_R32G32_SFLOAT;
+    attributes[2].offset = static_cast<std::uint32_t>(offsetof(MeshVertex, texcoord));
     return attributes;
 }
 
@@ -651,6 +673,204 @@ void endSingleTimeCommands(
     vkFreeCommandBuffers(device, pool, 1, &command_buffer);
 }
 
+struct ImagePixels {
+    std::vector<std::uint8_t> rgba;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+};
+
+ImagePixels loadImagePixels(const fs::path& path) {
+#if defined(_WIN32)
+    const HRESULT co_init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (FAILED(co_init) && co_init != RPC_E_CHANGED_MODE) {
+        throw std::runtime_error("Failed to initialize COM for texture loading.");
+    }
+
+    IWICImagingFactory* factory = nullptr;
+    HRESULT hr = CoCreateInstance(
+        CLSID_WICImagingFactory,
+        nullptr,
+        CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&factory));
+    if (FAILED(hr)) {
+        throw std::runtime_error("Failed to create WIC imaging factory.");
+    }
+
+    IWICBitmapDecoder* decoder = nullptr;
+    hr = factory->CreateDecoderFromFilename(
+        path.wstring().c_str(),
+        nullptr,
+        GENERIC_READ,
+        WICDecodeMetadataCacheOnLoad,
+        &decoder);
+    if (FAILED(hr)) {
+        factory->Release();
+        throw std::runtime_error("Failed to open texture " + path.string());
+    }
+
+    IWICBitmapFrameDecode* frame = nullptr;
+    hr = decoder->GetFrame(0, &frame);
+    if (FAILED(hr)) {
+        decoder->Release();
+        factory->Release();
+        throw std::runtime_error("Failed to decode texture frame " + path.string());
+    }
+
+    IWICFormatConverter* converter = nullptr;
+    hr = factory->CreateFormatConverter(&converter);
+    if (SUCCEEDED(hr)) {
+        hr = converter->Initialize(
+            frame,
+            GUID_WICPixelFormat32bppRGBA,
+            WICBitmapDitherTypeNone,
+            nullptr,
+            0.0,
+            WICBitmapPaletteTypeCustom);
+    }
+    if (FAILED(hr)) {
+        if (converter != nullptr) { converter->Release(); }
+        frame->Release();
+        decoder->Release();
+        factory->Release();
+        throw std::runtime_error("Failed to convert texture to RGBA " + path.string());
+    }
+
+    ImagePixels pixels;
+    UINT width = 0;
+    UINT height = 0;
+    converter->GetSize(&width, &height);
+    pixels.width = static_cast<std::uint32_t>(width);
+    pixels.height = static_cast<std::uint32_t>(height);
+    const UINT stride = width * 4U;
+    const UINT bytes = stride * height;
+    pixels.rgba.resize(bytes);
+    hr = converter->CopyPixels(nullptr, stride, bytes, pixels.rgba.data());
+
+    converter->Release();
+    frame->Release();
+    decoder->Release();
+    factory->Release();
+
+    if (FAILED(hr)) {
+        throw std::runtime_error("Failed to copy texture pixels " + path.string());
+    }
+    return pixels;
+#else
+    (void)path;
+    throw std::runtime_error("Texture loading is only implemented for the Windows Vulkan viewer build.");
+#endif
+}
+
+void createImage(
+    const VkPhysicalDevice physical_device,
+    const VkDevice device,
+    const std::uint32_t width,
+    const std::uint32_t height,
+    const VkFormat format,
+    const VkImageTiling tiling,
+    const VkImageUsageFlags usage,
+    const VkMemoryPropertyFlags properties,
+    TextureResource& texture) {
+    VkImageCreateInfo image_info{};
+    image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image_info.imageType = VK_IMAGE_TYPE_2D;
+    image_info.extent = {width, height, 1};
+    image_info.mipLevels = 1;
+    image_info.arrayLayers = 1;
+    image_info.format = format;
+    image_info.tiling = tiling;
+    image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    image_info.usage = usage;
+    image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+    image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateImage(device, &image_info, nullptr, &texture.image) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create texture image.");
+    }
+
+    VkMemoryRequirements memory_requirements{};
+    vkGetImageMemoryRequirements(device, texture.image, &memory_requirements);
+
+    VkMemoryAllocateInfo alloc_info{};
+    alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc_info.allocationSize = memory_requirements.size;
+    alloc_info.memoryTypeIndex =
+        findMemoryType(physical_device, memory_requirements.memoryTypeBits, properties);
+
+    if (vkAllocateMemory(device, &alloc_info, nullptr, &texture.memory) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate texture memory.");
+    }
+    vkBindImageMemory(device, texture.image, texture.memory, 0);
+    texture.width = width;
+    texture.height = height;
+}
+
+void transitionImageLayout(
+    const VkDevice device,
+    const VkQueue graphics_queue,
+    const VkCommandPool pool,
+    const VkImage image,
+    const VkImageLayout old_layout,
+    const VkImageLayout new_layout) {
+    const VkCommandBuffer command_buffer = beginSingleTimeCommands(device, pool);
+
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = old_layout;
+    barrier.newLayout = new_layout;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.layerCount = 1;
+
+    VkPipelineStageFlags src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    VkPipelineStageFlags dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+        && new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        dst_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    } else {
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    }
+
+    vkCmdPipelineBarrier(
+        command_buffer,
+        src_stage,
+        dst_stage,
+        0,
+        0,
+        nullptr,
+        0,
+        nullptr,
+        1,
+        &barrier);
+
+    endSingleTimeCommands(device, graphics_queue, pool, command_buffer);
+}
+
+void copyBufferToImage(
+    const VkDevice device,
+    const VkQueue graphics_queue,
+    const VkCommandPool pool,
+    const VkBuffer buffer,
+    const VkImage image,
+    const std::uint32_t width,
+    const std::uint32_t height) {
+    const VkCommandBuffer command_buffer = beginSingleTimeCommands(device, pool);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent = {width, height, 1};
+    vkCmdCopyBufferToImage(command_buffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    endSingleTimeCommands(device, graphics_queue, pool, command_buffer);
+}
+
 VkShaderModule createShaderModule(const VkDevice device, const std::vector<char>& code) {
     VkShaderModuleCreateInfo create_info{};
     create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -718,6 +938,9 @@ struct ArchitectureViewerApp::Impl {
 
     std::vector<MeshResource> mannequin_meshes;
     bool mannequin_loaded = false;
+    TextureResource default_texture;
+    TextureResource mannequin_plastic_texture;
+    TextureResource mannequin_metal_texture;
     // Human reference figure placed 9 m in +Y, feet at Z = 0 (hub height).
     Eigen::Vector3d mannequin_world_pos{0.0, 9.0, 0.0};
     VkSampleCountFlagBits msaa_samples = VK_SAMPLE_COUNT_4_BIT;
@@ -736,6 +959,7 @@ struct ArchitectureViewerApp::Impl {
     bool ui_show_labels = true;
     bool ui_wireframe = false;
     std::unordered_map<std::string, bool> element_visibility;
+    bool sampler_anisotropy_supported = false;
 
 #ifdef HEXAARCH_HAS_IMGUI
     VkDescriptorPool imgui_pool = VK_NULL_HANDLE;
@@ -794,6 +1018,179 @@ VkSampleCountFlagBits pickMsaaSamples(const VkPhysicalDevice device) {
         if (counts & s) { return s; }
     }
     return VK_SAMPLE_COUNT_1_BIT;
+}
+
+void destroyTexture(const VkDevice device, TextureResource& texture) {
+    if (texture.sampler != VK_NULL_HANDLE) {
+        vkDestroySampler(device, texture.sampler, nullptr);
+        texture.sampler = VK_NULL_HANDLE;
+    }
+    if (texture.view != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, texture.view, nullptr);
+        texture.view = VK_NULL_HANDLE;
+    }
+    if (texture.image != VK_NULL_HANDLE) {
+        vkDestroyImage(device, texture.image, nullptr);
+        texture.image = VK_NULL_HANDLE;
+    }
+    if (texture.memory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, texture.memory, nullptr);
+        texture.memory = VK_NULL_HANDLE;
+    }
+    texture.descriptor_sets.fill(VK_NULL_HANDLE);
+    texture.width = 0;
+    texture.height = 0;
+}
+
+void createTextureFromPixels(
+    ArchitectureViewerApp::Impl& impl,
+    const std::uint8_t* pixels,
+    const std::uint32_t width,
+    const std::uint32_t height,
+    TextureResource& texture) {
+    const VkDeviceSize image_size = static_cast<VkDeviceSize>(width) * height * 4U;
+    BufferResource staging;
+    createBuffer(
+        impl.physical_device,
+        impl.device,
+        image_size,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        staging);
+
+    void* mapped = nullptr;
+    vkMapMemory(impl.device, staging.memory, 0, image_size, 0, &mapped);
+    std::memcpy(mapped, pixels, static_cast<std::size_t>(image_size));
+    vkUnmapMemory(impl.device, staging.memory);
+
+    createImage(
+        impl.physical_device,
+        impl.device,
+        width,
+        height,
+        VK_FORMAT_R8G8B8A8_SRGB,
+        VK_IMAGE_TILING_OPTIMAL,
+        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        texture);
+    transitionImageLayout(
+        impl.device,
+        impl.graphics_queue,
+        impl.transfer_pool,
+        texture.image,
+        VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    copyBufferToImage(
+        impl.device,
+        impl.graphics_queue,
+        impl.transfer_pool,
+        staging.buffer,
+        texture.image,
+        width,
+        height);
+    transitionImageLayout(
+        impl.device,
+        impl.graphics_queue,
+        impl.transfer_pool,
+        texture.image,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+    destroyBuffer(impl.device, staging);
+
+    VkImageViewCreateInfo view_info{};
+    view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view_info.image = texture.image;
+    view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view_info.format = VK_FORMAT_R8G8B8A8_SRGB;
+    view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    view_info.subresourceRange.levelCount = 1;
+    view_info.subresourceRange.layerCount = 1;
+    if (vkCreateImageView(impl.device, &view_info, nullptr, &texture.view) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create texture image view.");
+    }
+
+    VkPhysicalDeviceProperties properties{};
+    vkGetPhysicalDeviceProperties(impl.physical_device, &properties);
+
+    VkSamplerCreateInfo sampler_info{};
+    sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sampler_info.magFilter = VK_FILTER_LINEAR;
+    sampler_info.minFilter = VK_FILTER_LINEAR;
+    sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampler_info.anisotropyEnable = impl.sampler_anisotropy_supported ? VK_TRUE : VK_FALSE;
+    sampler_info.maxAnisotropy = impl.sampler_anisotropy_supported
+        ? std::min(8.0f, properties.limits.maxSamplerAnisotropy)
+        : 1.0f;
+    sampler_info.maxLod = 0.0f;
+    if (vkCreateSampler(impl.device, &sampler_info, nullptr, &texture.sampler) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create texture sampler.");
+    }
+}
+
+void createTextureFromFile(
+    ArchitectureViewerApp::Impl& impl,
+    const fs::path& path,
+    TextureResource& texture) {
+    const ImagePixels pixels = loadImagePixels(path);
+    createTextureFromPixels(impl, pixels.rgba.data(), pixels.width, pixels.height, texture);
+}
+
+void createDefaultTexture(ArchitectureViewerApp::Impl& impl) {
+    constexpr std::array<std::uint8_t, 4> white{255, 255, 255, 255};
+    createTextureFromPixels(impl, white.data(), 1, 1, impl.default_texture);
+}
+
+void allocateTextureDescriptorSets(ArchitectureViewerApp::Impl& impl, TextureResource& texture) {
+    std::array<VkDescriptorSetLayout, kFramesInFlight> layouts{};
+    layouts.fill(impl.descriptor_set_layout);
+
+    VkDescriptorSetAllocateInfo alloc_info{};
+    alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc_info.descriptorPool = impl.descriptor_pool;
+    alloc_info.descriptorSetCount = static_cast<std::uint32_t>(layouts.size());
+    alloc_info.pSetLayouts = layouts.data();
+
+    if (vkAllocateDescriptorSets(impl.device, &alloc_info, texture.descriptor_sets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate texture descriptor sets.");
+    }
+
+    for (std::size_t index = 0; index < kFramesInFlight; ++index) {
+        VkDescriptorBufferInfo buffer_info{};
+        buffer_info.buffer = impl.frames[index].uniform_buffer.buffer;
+        buffer_info.offset = 0;
+        buffer_info.range = sizeof(GlobalUniformData);
+
+        VkDescriptorImageInfo image_info{};
+        image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        image_info.imageView = texture.view;
+        image_info.sampler = texture.sampler;
+
+        std::array<VkWriteDescriptorSet, 2> writes{};
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = texture.descriptor_sets[index];
+        writes[0].dstBinding = 0;
+        writes[0].descriptorCount = 1;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[0].pBufferInfo = &buffer_info;
+
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = texture.descriptor_sets[index];
+        writes[1].dstBinding = 1;
+        writes[1].descriptorCount = 1;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].pImageInfo = &image_info;
+
+        vkUpdateDescriptorSets(
+            impl.device,
+            static_cast<std::uint32_t>(writes.size()),
+            writes.data(),
+            0,
+            nullptr);
+    }
 }
 
 void destroySwapchainResources(ArchitectureViewerApp::Impl& impl) {
@@ -1067,16 +1464,21 @@ void createRenderPass(ArchitectureViewerApp::Impl& impl) {
 }
 
 void createDescriptorSetLayout(ArchitectureViewerApp::Impl& impl) {
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutCreateInfo create_info{};
     create_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    create_info.bindingCount = 1;
-    create_info.pBindings = &binding;
+    create_info.bindingCount = static_cast<std::uint32_t>(bindings.size());
+    create_info.pBindings = bindings.data();
 
     if (vkCreateDescriptorSetLayout(impl.device, &create_info, nullptr, &impl.descriptor_set_layout) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create descriptor set layout.");
@@ -1334,15 +1736,18 @@ void createPerImagePresentSemaphores(ArchitectureViewerApp::Impl& impl) {
 }
 
 void createDescriptorPoolAndSets(ArchitectureViewerApp::Impl& impl) {
-    VkDescriptorPoolSize pool_size{};
-    pool_size.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    pool_size.descriptorCount = static_cast<std::uint32_t>(kFramesInFlight);
+    constexpr std::uint32_t kTextureSetCapacity = 8U;
+    std::array<VkDescriptorPoolSize, 2> pool_sizes{};
+    pool_sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    pool_sizes[0].descriptorCount = static_cast<std::uint32_t>(kFramesInFlight) * kTextureSetCapacity;
+    pool_sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    pool_sizes[1].descriptorCount = static_cast<std::uint32_t>(kFramesInFlight) * kTextureSetCapacity;
 
     VkDescriptorPoolCreateInfo pool_info{};
     pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pool_info.poolSizeCount = 1;
-    pool_info.pPoolSizes = &pool_size;
-    pool_info.maxSets = static_cast<std::uint32_t>(kFramesInFlight);
+    pool_info.poolSizeCount = static_cast<std::uint32_t>(pool_sizes.size());
+    pool_info.pPoolSizes = pool_sizes.data();
+    pool_info.maxSets = static_cast<std::uint32_t>(kFramesInFlight) * kTextureSetCapacity;
 
     if (vkCreateDescriptorPool(impl.device, &pool_info, nullptr, &impl.descriptor_pool) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create descriptor pool.");
@@ -1370,15 +1775,34 @@ void createDescriptorPoolAndSets(ArchitectureViewerApp::Impl& impl) {
         buffer_info.offset = 0;
         buffer_info.range = sizeof(GlobalUniformData);
 
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = impl.frames[index].descriptor_set;
-        write.dstBinding = 0;
-        write.descriptorCount = 1;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        write.pBufferInfo = &buffer_info;
-        vkUpdateDescriptorSets(impl.device, 1, &write, 0, nullptr);
+        VkDescriptorImageInfo image_info{};
+        image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        image_info.imageView = impl.default_texture.view;
+        image_info.sampler = impl.default_texture.sampler;
+
+        std::array<VkWriteDescriptorSet, 2> writes{};
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = impl.frames[index].descriptor_set;
+        writes[0].dstBinding = 0;
+        writes[0].descriptorCount = 1;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[0].pBufferInfo = &buffer_info;
+
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = impl.frames[index].descriptor_set;
+        writes[1].dstBinding = 1;
+        writes[1].descriptorCount = 1;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].pImageInfo = &image_info;
+
+        vkUpdateDescriptorSets(
+            impl.device,
+            static_cast<std::uint32_t>(writes.size()),
+            writes.data(),
+            0,
+            nullptr);
     }
+    impl.default_texture.descriptor_sets = descriptor_sets;
 }
 
 void createFrameResources(ArchitectureViewerApp::Impl& impl) {
@@ -1539,6 +1963,12 @@ void loadMannequin(ArchitectureViewerApp::Impl& impl) {
     }
     const fs::path gltf = asset_root / "ue4_mannequin_base_mesh" / "scene.gltf";
     try {
+        const fs::path texture_root = asset_root / "ue4_mannequin_base_mesh" / "textures";
+        createTextureFromFile(impl, texture_root / "Plastic_baseColor.png", impl.mannequin_plastic_texture);
+        createTextureFromFile(impl, texture_root / "Metal_baseColor.png", impl.mannequin_metal_texture);
+        allocateTextureDescriptorSets(impl, impl.mannequin_plastic_texture);
+        allocateTextureDescriptorSets(impl, impl.mannequin_metal_texture);
+
         // UE4 mannequin: Y height ≈ 182.53 cm → scale to exactly 1.80 m
         constexpr float kMannequinHeight = 182.53f;
         const float scale = 1.80f / kMannequinHeight;
@@ -1547,6 +1977,11 @@ void loadMannequin(ArchitectureViewerApp::Impl& impl) {
             MeshResource resource;
             uploadMesh(impl, md, resource);
             resource.material_name = md.material_name;
+            const bool is_metal = (md.material_name.find("Metal") != std::string::npos
+                                || md.material_name.find("metal") != std::string::npos);
+            resource.descriptor_sets = is_metal
+                ? impl.mannequin_metal_texture.descriptor_sets
+                : impl.mannequin_plastic_texture.descriptor_sets;
             impl.mannequin_meshes.push_back(std::move(resource));
         }
         impl.mannequin_loaded = !impl.mannequin_meshes.empty();
@@ -1648,15 +2083,21 @@ void recordCommandBuffer(
 
     vkCmdBeginRenderPass(command_buffer, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
 
-    vkCmdBindDescriptorSets(
-        command_buffer,
-        VK_PIPELINE_BIND_POINT_GRAPHICS,
-        impl.pipeline_layout,
-        0,
-        1,
-        &impl.frames[frame_index].descriptor_set,
-        0,
-        nullptr);
+    VkDescriptorSet bound_descriptor_set = VK_NULL_HANDLE;
+    const auto bindDescriptorSet = [&](const VkDescriptorSet set) {
+        if (set == bound_descriptor_set || set == VK_NULL_HANDLE) { return; }
+        vkCmdBindDescriptorSets(
+            command_buffer,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            impl.pipeline_layout,
+            0,
+            1,
+            &set,
+            0,
+            nullptr);
+        bound_descriptor_set = set;
+    };
+    bindDescriptorSet(impl.frames[frame_index].descriptor_set);
 
     // Two-pass rendering: opaque geometry first, then transparent (envelope) geometry.
     // Transparent instances use the alpha_pipeline (blending on, depth write off).
@@ -1679,6 +2120,7 @@ void recordCommandBuffer(
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, active_pipeline);
             bound_pipeline = active_pipeline;
         }
+        bindDescriptorSet(impl.frames[frame_index].descriptor_set);
 
         const MeshResource& mesh = mesh_it->second;
         const VkBuffer vertex_buffers[] = {mesh.vertex_buffer.buffer};
@@ -1707,12 +2149,9 @@ void recordCommandBuffer(
         if (instance.color[3] >= 0.99f) { drawInstance(instance, bound_pipeline); }
     }
 
-    // Human reference mannequin: opaque, color driven by glTF material name.
+    // Human reference mannequin: neutral base colors with glTF textures used as surface detail.
     if (impl.mannequin_loaded) {
-        // Neutral mannequin palette — both parts stay in the same warm-gray family
-        // so the figure reads as a unified silhouette against the coloured vehicle.
-        constexpr std::array<float, 4> kSkinColor  = {0.80f, 0.76f, 0.72f, 1.0f};  // light warm gray (body)
-        constexpr std::array<float, 4> kMetalColor = {0.48f, 0.48f, 0.52f, 1.0f};  // cool mid-gray (hardware)
+        constexpr std::array<float, 4> kBaseColor = {0.55f, 0.56f, 0.58f, 1.0f};
         if (impl.graphics_pipeline != bound_pipeline) {
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, impl.graphics_pipeline);
             bound_pipeline = impl.graphics_pipeline;
@@ -1724,14 +2163,12 @@ void recordCommandBuffer(
         mann_push.model[14] = static_cast<float>(impl.mannequin_world_pos.z());
 
         for (const auto& mesh : impl.mannequin_meshes) {
+            bindDescriptorSet(mesh.descriptor_sets[frame_index]);
             const VkBuffer vbufs[] = {mesh.vertex_buffer.buffer};
             constexpr VkDeviceSize voffsets[] = {0};
             vkCmdBindVertexBuffers(command_buffer, 0, 1, vbufs, voffsets);
             vkCmdBindIndexBuffer(command_buffer, mesh.index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-            const bool is_metal = (mesh.material_name.find("Metal") != std::string::npos
-                                || mesh.material_name.find("metal") != std::string::npos);
-            const auto& col = is_metal ? kMetalColor : kSkinColor;
-            std::memcpy(mann_push.color, col.data(), sizeof(mann_push.color));
+            std::memcpy(mann_push.color, kBaseColor.data(), sizeof(mann_push.color));
             vkCmdPushConstants(command_buffer, impl.pipeline_layout,
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                 0, sizeof(PushConstants), &mann_push);
@@ -1899,6 +2336,9 @@ void cleanupViewer(ArchitectureViewerApp::Impl& impl) {
         vkDeviceWaitIdle(impl.device);
         cleanupImGui(impl);
         cleanupMeshes(impl);
+        destroyTexture(impl.device, impl.mannequin_metal_texture);
+        destroyTexture(impl.device, impl.mannequin_plastic_texture);
+        destroyTexture(impl.device, impl.default_texture);
         destroySwapchainResources(impl);
     }
 
@@ -2062,6 +2502,7 @@ void pickPhysicalDevice(ArchitectureViewerApp::Impl& impl) {
             VkPhysicalDeviceFeatures features{};
             vkGetPhysicalDeviceFeatures(device, &features);
             impl.fillmode_nonsolid_supported = features.fillModeNonSolid == VK_TRUE;
+            impl.sampler_anisotropy_supported = features.samplerAnisotropy == VK_TRUE;
             impl.msaa_samples = pickMsaaSamples(device);
             return;
         }
@@ -2089,6 +2530,9 @@ void createLogicalDevice(ArchitectureViewerApp::Impl& impl) {
     VkPhysicalDeviceFeatures device_features{};
     if (impl.fillmode_nonsolid_supported) {
         device_features.fillModeNonSolid = VK_TRUE;
+    }
+    if (impl.sampler_anisotropy_supported) {
+        device_features.samplerAnisotropy = VK_TRUE;
     }
 
     const char* extensions[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
@@ -2127,6 +2571,7 @@ void initViewerRuntime(ArchitectureViewerApp::Impl& impl) {
     createDescriptorSetLayout(impl);
     createFrameResources(impl);
     createTransferPool(impl);
+    createDefaultTexture(impl);
     createDescriptorPoolAndSets(impl);
     createSwapchain(impl);
     createSwapchainImageViews(impl);

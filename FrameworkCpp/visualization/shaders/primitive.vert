@@ -13,14 +13,17 @@ layout(push_constant) uniform PushConstants {
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
+layout(location = 2) in vec2 inTexCoord;
 
 layout(location = 0) out vec3 fragNormal;
 layout(location = 1) out vec4 fragColor;
+layout(location = 2) out vec2 fragTexCoord;
 
 void main() {
     vec4 worldPosition = pushData.model * vec4(inPosition, 1.0);
     mat3 normalMatrix = transpose(inverse(mat3(pushData.model)));
     fragNormal = normalize(normalMatrix * inNormal);
     fragColor = pushData.color;
+    fragTexCoord = inTexCoord;
     gl_Position = ubo.projection * ubo.view * worldPosition;
 }

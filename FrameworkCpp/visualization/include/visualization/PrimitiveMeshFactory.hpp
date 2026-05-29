@@ -10,6 +10,7 @@ namespace hexaarch::visualization {
 struct MeshVertex {
     std::array<float, 3> position{0.0f, 0.0f, 0.0f};
     std::array<float, 3> normal{0.0f, 0.0f, 1.0f};
+    std::array<float, 2> texcoord{0.0f, 0.0f};
 };
 
 struct MeshData {
