@@ -973,6 +973,8 @@ struct ArchitectureViewerApp::Impl {
     std::optional<core::HexacopterArchitecture> pending_arch;
     std::string pending_title;
     std::optional<core::HexacopterArchitecture> owned_arch;
+    std::optional<evaluation::EvaluationResult> pending_result;
+    std::optional<evaluation::EvaluationResult> owned_result;
 
     [[nodiscard]] fs::path compiledShaderPath(const std::string_view source_name) const {
         return shader_root / "compiled" / (std::string(source_name) + ".spv");
@@ -2698,31 +2700,30 @@ void renderUiPanel(ArchitectureViewerApp::Impl& impl) {
     const float W = static_cast<float>(impl.swapchain_extent.width);
     ImGui::SetNextWindowPos(ImVec2(W - panel_w - 10.0f, 10.0f), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(panel_w, 0.0f), ImGuiCond_Always);
-    ImGui::Begin("View Options", nullptr,
-        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+    if (ImGui::Begin("View Options", nullptr,
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize)) {
+        bool changed = false;
+        changed |= ImGui::Checkbox("Reference Axes", &impl.ui_show_axes);
+        changed |= ImGui::Checkbox("Reference Grid", &impl.ui_show_grid);
+        ImGui::Separator();
+        ImGui::Checkbox("Labels", &impl.ui_show_labels);
+        ImGui::Separator();
+        ImGui::Checkbox("Wireframe", &impl.ui_wireframe);
+        if (changed) { applyVisibilityFlags(impl); }
 
-    bool changed = false;
-    changed |= ImGui::Checkbox("Reference Axes", &impl.ui_show_axes);
-    changed |= ImGui::Checkbox("Reference Grid", &impl.ui_show_grid);
-    ImGui::Separator();
-    ImGui::Checkbox("Labels", &impl.ui_show_labels);
-    ImGui::Separator();
-    ImGui::Checkbox("Wireframe", &impl.ui_wireframe);
-    if (changed) { applyVisibilityFlags(impl); }
-
-    ImGui::Separator();
-    ImGui::SetNextItemWidth(panel_w - std::round(20.0f * eff_scale));
-    ImGui::SliderFloat("##scale", &impl.ui_scale_drag, 0.5f, 3.0f, "Scale %.2f");
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
-        // Commit the drag value and apply the style rescale once on mouse release.
-        impl.ui_scale = std::max(0.5f, std::min(3.0f, impl.ui_scale_drag));
-        impl.ui_scale_drag = impl.ui_scale;
-        const float new_eff = impl.ui_dpi_scale * impl.ui_scale;
-        ImGui::GetStyle() = impl.imgui_style_base;
-        ImGui::GetStyle().ScaleAllSizes(new_eff);
-        ImGui::GetIO().FontGlobalScale = impl.ui_scale;
+        ImGui::Separator();
+        ImGui::SetNextItemWidth(panel_w - std::round(20.0f * eff_scale));
+        ImGui::SliderFloat("##scale", &impl.ui_scale_drag, 0.5f, 3.0f, "Scale %.2f");
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            // Commit the drag value and apply the style rescale once on mouse release.
+            impl.ui_scale = std::max(0.5f, std::min(3.0f, impl.ui_scale_drag));
+            impl.ui_scale_drag = impl.ui_scale;
+            const float new_eff = impl.ui_dpi_scale * impl.ui_scale;
+            ImGui::GetStyle() = impl.imgui_style_base;
+            ImGui::GetStyle().ScaleAllSizes(new_eff);
+            ImGui::GetIO().FontGlobalScale = impl.ui_scale;
+        }
     }
-
     ImGui::End();
 #else
     (void)impl;
@@ -2739,62 +2740,156 @@ void renderElementListPanel(ArchitectureViewerApp::Impl& impl) {
     const float panel_h = std::round(340.0f * eff_scale);
     ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(panel_w, panel_h), ImGuiCond_Always);
-    ImGui::Begin("Elements", nullptr,
-        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+    if (ImGui::Begin("Elements", nullptr,
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize)) {
+        const float table_h = panel_h - std::round(60.0f * eff_scale);
+        const float col_vis_w  = std::round(26.0f * eff_scale);
+        const float col_mass_w = std::round(58.0f * eff_scale);
+        bool vis_changed = false;
+        if (ImGui::BeginTable("##elems", 5,
+                ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg,
+                ImVec2(0.0f, table_h))) {
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableSetupColumn("##vis",  ImGuiTableColumnFlags_WidthFixed,   col_vis_w);
+            ImGui::TableSetupColumn("ID",     ImGuiTableColumnFlags_WidthStretch, 1.2f);
+            ImGui::TableSetupColumn("Type",   ImGuiTableColumnFlags_WidthStretch, 0.8f);
+            ImGui::TableSetupColumn("Mass",   ImGuiTableColumnFlags_WidthFixed,   col_mass_w);
+            ImGui::TableSetupColumn("Pos(m)", ImGuiTableColumnFlags_WidthStretch, 1.5f);
+            ImGui::TableHeadersRow();
 
-    const float table_h = panel_h - std::round(60.0f * eff_scale);
-    const float col_vis_w  = std::round(26.0f * eff_scale);
-    const float col_mass_w = std::round(58.0f * eff_scale);
-    bool vis_changed = false;
-    if (ImGui::BeginTable("##elems", 5,
-            ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg,
-            ImVec2(0.0f, table_h))) {
-        ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("##vis",  ImGuiTableColumnFlags_WidthFixed,   col_vis_w);
-        ImGui::TableSetupColumn("ID",     ImGuiTableColumnFlags_WidthStretch, 1.2f);
-        ImGui::TableSetupColumn("Type",   ImGuiTableColumnFlags_WidthStretch, 0.8f);
-        ImGui::TableSetupColumn("Mass",   ImGuiTableColumnFlags_WidthFixed,   col_mass_w);
-        ImGui::TableSetupColumn("Pos(m)", ImGuiTableColumnFlags_WidthStretch, 1.5f);
-        ImGui::TableHeadersRow();
+            for (const auto& ae : assembled) {
+                if (ae.element == nullptr) { continue; }
+                const std::string& etype = ae.element->type();
+                if (etype == "ReferenceAxis" || etype == "ReferenceGrid") { continue; }
 
-        for (const auto& ae : assembled) {
-            if (ae.element == nullptr) { continue; }
-            const std::string& etype = ae.element->type();
-            if (etype == "ReferenceAxis" || etype == "ReferenceGrid") { continue; }
+                const std::string& eid = ae.element->id();
+                const bool has_suffix = etype.size() > 7 &&
+                    etype.compare(etype.size() - 7, 7, "Element") == 0;
+                const std::string short_type = has_suffix ? etype.substr(0, etype.size() - 7) : etype;
+                const Eigen::Vector3d pos = ae.world_pose.translation();
 
-            const std::string& eid = ae.element->id();
-            const bool has_suffix = etype.size() > 7 &&
-                etype.compare(etype.size() - 7, 7, "Element") == 0;
-            const std::string short_type = has_suffix ? etype.substr(0, etype.size() - 7) : etype;
-            const Eigen::Vector3d pos = ae.world_pose.translation();
+                ImGui::TableNextRow();
 
-            ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                const auto vis_it = impl.element_visibility.find(eid);
+                bool vis = (vis_it == impl.element_visibility.end()) || vis_it->second;
+                ImGui::PushID(eid.c_str());
+                if (ImGui::Checkbox("##v", &vis)) {
+                    impl.element_visibility[eid] = vis;
+                    vis_changed = true;
+                }
+                ImGui::PopID();
 
-            ImGui::TableSetColumnIndex(0);
-            const auto vis_it = impl.element_visibility.find(eid);
-            bool vis = (vis_it == impl.element_visibility.end()) || vis_it->second;
-            ImGui::PushID(eid.c_str());
-            if (ImGui::Checkbox("##v", &vis)) {
-                impl.element_visibility[eid] = vis;
-                vis_changed = true;
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextUnformatted(eid.c_str());
+                ImGui::TableSetColumnIndex(2);
+                ImGui::TextUnformatted(short_type.c_str());
+                ImGui::TableSetColumnIndex(3);
+                ImGui::Text("%.2f", ae.element->mass());
+                ImGui::TableSetColumnIndex(4);
+                ImGui::Text("%.1f,%.1f,%.1f", pos.x(), pos.y(), pos.z());
             }
-            ImGui::PopID();
 
-            ImGui::TableSetColumnIndex(1);
-            ImGui::TextUnformatted(eid.c_str());
-            ImGui::TableSetColumnIndex(2);
-            ImGui::TextUnformatted(short_type.c_str());
-            ImGui::TableSetColumnIndex(3);
-            ImGui::Text("%.2f", ae.element->mass());
-            ImGui::TableSetColumnIndex(4);
-            ImGui::Text("%.1f,%.1f,%.1f", pos.x(), pos.y(), pos.z());
+            ImGui::EndTable();
+        }
+        if (vis_changed) { applyVisibilityFlags(impl); }
+
+        ImGui::Text("%zu elements", assembled.size());
+    }
+    ImGui::End();
+#else
+    (void)impl;
+#endif
+}
+
+void renderResultPanel(ArchitectureViewerApp::Impl& impl) {
+#ifdef HEXAARCH_HAS_IMGUI
+    if (!impl.owned_result.has_value()) { return; }
+    const auto& res = *impl.owned_result;
+    const auto& m   = res.stage1;
+
+    const float eff_scale = impl.ui_dpi_scale * impl.ui_scale;
+    const float panel_w   = std::round(460.0f * eff_scale);
+    const float elem_h    = std::round(340.0f * eff_scale);
+    const float H         = static_cast<float>(impl.swapchain_extent.height);
+    const float top_y     = 10.0f + elem_h + 5.0f;
+    const float panel_h   = std::max(100.0f, H - top_y - 10.0f);
+
+    ImGui::SetNextWindowPos(ImVec2(10.0f, top_y), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(panel_w, panel_h), ImGuiCond_Always);
+    if (ImGui::Begin("Result", nullptr,
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize)) {
+        if (res.feasible) {
+            ImGui::TextColored(ImVec4(0.25f, 0.90f, 0.25f, 1.0f), "FEASIBLE");
+        } else {
+            ImGui::TextColored(ImVec4(0.90f, 0.25f, 0.25f, 1.0f), "INFEASIBLE");
+        }
+        ImGui::SameLine();
+        ImGui::Text("  Combined obj: %.5f", res.combined_objective);
+        ImGui::Separator();
+
+        const float scroll_h = panel_h - std::round(52.0f * eff_scale);
+        ImGui::BeginChild("##result_scroll", ImVec2(0.0f, scroll_h), false);
+
+        // Named objectives breakdown (the cost components the optimizer minimized).
+        if (!res.objectives.empty() && ImGui::CollapsingHeader("Objectives", ImGuiTreeNodeFlags_DefaultOpen)) {
+            for (const auto& obj : res.objectives) {
+                ImGui::Text("  %-20s  %.5f  (w=%.2f)", obj.name.c_str(), obj.value, obj.weight);
+            }
         }
 
-        ImGui::EndTable();
-    }
-    if (vis_changed) { applyVisibilityFlags(impl); }
+        // Key physical metrics.
+        if (ImGui::CollapsingHeader("Metrics", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Text("  Mass total       %.1f kg",    m.mass);
+            ImGui::Text("  Power nominal    %.1f kW",    m.pt_total_power_nominal_w * 1e-3);
+            ImGui::Text("  Bat reserve      %.4f",       m.bat_energy_reserve_fraction);
+            ImGui::Text("  Bat C-rate       %.2f /h",    m.bat_c_rate);
+            ImGui::Text("  Endurance        %.1f min",   m.bat_achievable_endurance_nom_min);
+            ImGui::Text("  ACS PFWAR        %.4f",       m.acs_PFWAR);
+            ImGui::Text("  ACS FII          %.4f",       m.acs_FII);
+            ImGui::Text("  ACS WCFR         %.4f",       m.acs_WCFR);
+            ImGui::Text("  ACS hover margin %.4f",       m.acs_hover_margin);
+            ImGui::Text("  Struct min SF    %.2f",       m.struct_net_min_safety_factor);
+            ImGui::Text("  Tip deflect      %.4f m",     m.struct_net_max_tip_deflection_m);
+            ImGui::Text("  Tip rotation     %.4f rad",   m.struct_net_max_tip_rotation_rad);
+            ImGui::Text("  Rotor clearance  %.3f m",     m.pkg_rotor_clearance_m);
+        }
 
-    ImGui::Text("%zu elements", assembled.size());
+        // Hard constraint pass/fail list.
+        int n_hard_fail  = 0;
+        int n_hard_total = 0;
+        for (const auto& c : res.constraint_results) {
+            if (!c.hard || !c.active) { continue; }
+            ++n_hard_total;
+            if (!c.evaluation.feasible) { ++n_hard_fail; }
+        }
+        const std::string con_hdr = "Constraints (" + std::to_string(n_hard_fail) +
+                                     " / " + std::to_string(n_hard_total) + " violated)";
+        if (ImGui::CollapsingHeader(con_hdr.c_str())) {
+            for (const auto& c : res.constraint_results) {
+                if (!c.hard || !c.active) { continue; }
+                if (c.evaluation.feasible) {
+                    ImGui::TextColored(ImVec4(0.25f, 0.85f, 0.25f, 1.0f), " OK");
+                } else {
+                    ImGui::TextColored(ImVec4(0.90f, 0.25f, 0.25f, 1.0f), " !!");
+                }
+                ImGui::SameLine();
+                ImGui::Text("%-32s %.5f", c.name.c_str(), c.evaluation.value);
+            }
+        }
+
+        // Active design variable values.
+        if (impl.owned_arch.has_value()) {
+            if (ImGui::CollapsingHeader("Design Variables")) {
+                for (const auto* p : impl.owned_arch->parameters().activeParameters()) {
+                    if (p == nullptr) { continue; }
+                    ImGui::Text("  %-20s  %.4f  %s", p->name.c_str(), p->value, p->unit.c_str());
+                }
+            }
+        }
+
+        ImGui::EndChild();
+    }
     ImGui::End();
 #else
     (void)impl;
@@ -2841,12 +2936,15 @@ void renderLabels(ArchitectureViewerApp::Impl& impl) {
 void processPendingUpdates(ArchitectureViewerApp::Impl& impl) {
     std::optional<core::HexacopterArchitecture> new_arch;
     std::string new_title;
+    std::optional<evaluation::EvaluationResult> new_result;
     {
         std::lock_guard<std::mutex> lock(impl.pending_mutex);
         new_arch = std::move(impl.pending_arch);
         impl.pending_arch.reset();
         new_title = std::move(impl.pending_title);
         impl.pending_title.clear();
+        new_result = std::move(impl.pending_result);
+        impl.pending_result.reset();
     }
     if (new_arch.has_value()) {
         impl.owned_arch = std::move(new_arch);
@@ -2878,6 +2976,9 @@ void processPendingUpdates(ArchitectureViewerApp::Impl& impl) {
     if (!new_title.empty() && impl.window != nullptr) {
         glfwSetWindowTitle(impl.window, new_title.c_str());
     }
+    if (new_result.has_value()) {
+        impl.owned_result = std::move(new_result);
+    }
 }
 
 void runViewerLoop(ArchitectureViewerApp::Impl& impl) {
@@ -2891,6 +2992,7 @@ void runViewerLoop(ArchitectureViewerApp::Impl& impl) {
         ImGui::NewFrame();
         renderUiPanel(impl);
         renderElementListPanel(impl);
+        renderResultPanel(impl);
         renderLabels(impl);
         ImGui::Render();
 #endif
@@ -2957,6 +3059,18 @@ int ArchitectureViewerApp::run() {
     printSceneSummary(config_, *architecture_, impl_->instances, "Phase V3 Vulkan viewer initialized.");
 
 #ifdef HEXAARCH_VISUALIZATION_HAS_VULKAN
+    // Populate owned_arch so renderElementListPanel and renderResultPanel work in
+    // the static (setArchitecture + run) path, not just the postArchitecture path.
+    impl_->owned_arch = *architecture_;
+    for (const auto& ae : impl_->owned_arch->assemblyState().elements) {
+        if (ae.element != nullptr) {
+            impl_->element_visibility.emplace(ae.element->id(), true);
+        }
+    }
+    if (result_.has_value()) {
+        impl_->owned_result = std::move(result_);
+        result_.reset();
+    }
     try {
         initViewerRuntime(*impl_);
         runViewerLoop(*impl_);
@@ -2975,6 +3089,15 @@ int ArchitectureViewerApp::run() {
 
 const ViewerCamera& ArchitectureViewerApp::camera() const {
     return impl_->camera;
+}
+
+void ArchitectureViewerApp::setResult(evaluation::EvaluationResult result) {
+    result_ = std::move(result);
+}
+
+void ArchitectureViewerApp::postResult(evaluation::EvaluationResult result) {
+    std::lock_guard<std::mutex> lock(impl_->pending_mutex);
+    impl_->pending_result = std::move(result);
 }
 
 }  // namespace hexaarch::visualization

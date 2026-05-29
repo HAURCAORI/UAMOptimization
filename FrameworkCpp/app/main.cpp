@@ -708,6 +708,7 @@ int runSooWithVisualization(
                 app.postArchitecture(
                     candidate,
                     "HexaArch SOO  Feasible Gen " + std::to_string(gen) + "/" + std::to_string(total));
+                app.postResult(evaluation);
             }
         };
         if (!ensureOutputDirectory(options.output_dir)) { return; }
@@ -720,6 +721,7 @@ int runSooWithVisualization(
             app.postArchitecture(
                 architectureFromDecisionVector(result.best_feasible->decision_vector),
                 "HexaArch SOO  Complete — " + hexaarch::analysis::ComparisonReporter::summarize(result));
+            app.postResult(result.best_feasible->result);
         }
         std::cout << "[" << currentTimestamp() << "] SOO complete: "
                   << hexaarch::analysis::ComparisonReporter::summarize(result) << '\n';
@@ -763,6 +765,7 @@ int runMooWithVisualization(
                 app.postArchitecture(
                     candidate,
                     "HexaArch MOO  Feasible Gen " + std::to_string(gen) + "/" + std::to_string(total));
+                app.postResult(evaluation);
             }
         };
         if (!ensureOutputDirectory(options.output_dir)) { return; }
@@ -776,6 +779,7 @@ int runMooWithVisualization(
             app.postArchitecture(
                 architectureFromDecisionVector(knee.decision_vector),
                 "HexaArch MOO  Complete — " + hexaarch::analysis::ComparisonReporter::summarize(result));
+            app.postResult(knee.evaluation);
         }
         std::cout << "[" << currentTimestamp() << "] MOO complete: "
                   << hexaarch::analysis::ComparisonReporter::summarize(result) << '\n';
@@ -809,6 +813,7 @@ int runVisualizerFromSooJson(const std::filesystem::path& json_path) {
     auto arch = architectureFromDecisionVector(dv);
     hexaarch::visualization::ArchitectureViewerApp app;
     app.setArchitecture(arch);
+    app.setResult(hexaarch::evaluation::ArchitectureEvaluator{}.evaluate(arch));
     return app.run();
 }
 
@@ -876,6 +881,7 @@ int runVisualizerFromMooJson(const std::filesystem::path& json_path) {
     auto arch = architectureFromDecisionVector(feasible[static_cast<std::size_t>(sel - 1)].decision_vector);
     hexaarch::visualization::ArchitectureViewerApp app;
     app.setArchitecture(arch);
+    app.setResult(hexaarch::evaluation::ArchitectureEvaluator{}.evaluate(arch));
     return app.run();
 }
 
@@ -917,6 +923,7 @@ int runVisualizer(
             architecture.rebuildAssembly();
             hexaarch::visualization::ArchitectureViewerApp app;
             app.setArchitecture(architecture);
+            app.setResult(hexaarch::evaluation::ArchitectureEvaluator{}.evaluate(architecture));
             app.run();
             continue;
         }
