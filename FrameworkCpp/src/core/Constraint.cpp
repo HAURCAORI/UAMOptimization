@@ -1,6 +1,7 @@
 #include "core/Constraint.hpp"
 
 #include <cmath>
+#include <iostream>
 #include <stdexcept>
 
 namespace hexaarch::core {
@@ -36,10 +37,18 @@ ConstraintEvaluation Constraint::evaluate(const ConstraintEvaluationContext& con
     try {
         return evaluator(context);
     } catch (const std::exception& ex) {
+        std::cerr << "[Constraint] exception in '" << stable_id() << "': " << ex.what() << '\n';
         ConstraintEvaluation fallback;
-        fallback.value = 0.0;
+        fallback.value     = (sense == ConstraintSense::greater_equal) ? threshold - 1.0 : threshold + 1.0;
         fallback.violation = 1.0;
-        fallback.feasible = false;
+        fallback.feasible  = false;
+        return fallback;
+    } catch (...) {
+        std::cerr << "[Constraint] unknown exception in '" << stable_id() << "'\n";
+        ConstraintEvaluation fallback;
+        fallback.value     = (sense == ConstraintSense::greater_equal) ? threshold - 1.0 : threshold + 1.0;
+        fallback.violation = 1.0;
+        fallback.feasible  = false;
         return fallback;
     }
 }

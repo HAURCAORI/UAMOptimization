@@ -1,6 +1,5 @@
 #include "analysis/ComparisonReporter.hpp"
 
-#include <array>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -93,49 +92,62 @@ std::string ComparisonReporter::summarize(const optimization::MooRunResult& resu
 
 std::string ComparisonReporter::summaryTable(
     const std::vector<std::pair<std::string, evaluation::EvaluationResult>>& labeled_results) {
-    static constexpr std::array<std::string_view, 15> kColumns = {
-        "label", "feasible", "objective", "mass", "power",
-        "fault_thrust", "fault_alloc", "hover_nom", "structural", "packaging",
-        "structural_safety", "min_safety_factor",
-        "hard_constraint_violated", "worst_violation_constraint", "worst_violation"
-    };
 
-    std::ostringstream stream;
-    for (std::size_t i = 0; i < kColumns.size(); ++i) {
-        if (i > 0) { stream << ','; }
-        stream << kColumns[i];
-    }
-    stream << '\n';
-    stream << std::fixed << std::setprecision(6);
-    for (const auto& [label, result] : labeled_results) {
+    // Column name and value live in one place — adding/removing a metric here
+    // updates both the CSV header and the data rows automatically.
+    struct Col { std::string_view name; std::string value; };
+
+    auto makeColumns = [](const std::string& label,
+                          const evaluation::EvaluationResult& result) -> std::vector<Col> {
         bool hard_violated = false;
         std::string worst_id;
-        double worst_violation = 0.0;
+        double worst_viol = 0.0;
         for (const auto& cr : result.constraint_results) {
             if (cr.hard && cr.active && !cr.evaluation.feasible) {
                 hard_violated = true;
-                if (cr.evaluation.violation > worst_violation) {
-                    worst_violation = cr.evaluation.violation;
-                    worst_id = cr.stable_id;
+                if (cr.evaluation.violation > worst_viol) {
+                    worst_viol = cr.evaluation.violation;
+                    worst_id   = cr.stable_id;
                 }
             }
         }
+        auto d = [](double v) {
+            std::ostringstream s; s << std::fixed << std::setprecision(6) << v; return s.str();
+        };
+        return {
+            {"label",                      label},
+            {"feasible",                   result.feasible ? "true" : "false"},
+            {"objective",                  d(result.combined_objective)},
+            {"mass",                       d(result.stage1.mass)},
+            {"power",                      d(result.stage1.power)},
+            {"fault_thrust",               d(result.stage1.fault_thrust)},
+            {"fault_alloc",                d(result.stage1.fault_alloc)},
+            {"hover_nom",                  d(result.stage1.hover_nom)},
+            {"structural",                 d(result.stage1.structural)},
+            {"packaging",                  d(result.stage1.packaging)},
+            {"structural_safety",          d(result.stage1.structural_safety)},
+            {"min_safety_factor",          d(result.physical_model.structural.min_safety_factor)},
+            {"hard_constraint_violated",   hard_violated ? "true" : "false"},
+            {"worst_violation_constraint", std::move(worst_id)},
+            {"worst_violation",            d(worst_viol)},
+        };
+    };
 
-        stream << label << ','
-               << (result.feasible ? "true" : "false") << ','
-               << result.combined_objective << ','
-               << result.stage1.mass << ','
-               << result.stage1.power << ','
-               << result.stage1.fault_thrust << ','
-               << result.stage1.fault_alloc << ','
-               << result.stage1.hover_nom << ','
-               << result.stage1.structural << ','
-               << result.stage1.packaging << ','
-               << result.stage1.structural_safety << ','
-               << result.physical_model.structural.min_safety_factor << ','
-               << (hard_violated ? "true" : "false") << ','
-               << worst_id << ','
-               << worst_violation << '\n';
+    std::ostringstream stream;
+    const auto header = makeColumns("", {});
+    for (std::size_t i = 0; i < header.size(); ++i) {
+        if (i > 0) stream << ',';
+        stream << header[i].name;
+    }
+    stream << '\n';
+
+    for (const auto& [lbl, result] : labeled_results) {
+        const auto cols = makeColumns(lbl, result);
+        for (std::size_t i = 0; i < cols.size(); ++i) {
+            if (i > 0) stream << ',';
+            stream << cols[i].value;
+        }
+        stream << '\n';
     }
     return stream.str();
 }
