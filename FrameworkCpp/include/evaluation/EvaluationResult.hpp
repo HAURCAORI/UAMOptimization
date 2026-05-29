@@ -113,6 +113,8 @@ struct Stage1Metrics {
     double pkg_battery_containment_m = 0.0;       // > 0 = battery protrudes outside cabin [m]
     double pkg_battery_payload_overlap_m = 0.0;   // > 0 = battery–payload penetration [m]
     double pkg_payload_internal_overlap_m = 0.0;  // > 0 = passenger/cargo/instrument overlap [m]
+    double cabin_internal_clearance_m = 0.0;      // min positive cabin packing clearance [m]
+    double cabin_space_penalty = 0.0;             // soft objective; lower is roomier
     double pkg_occupant_containment_m = 0.0;      // > 0 = occupant envelope protrudes outside cabin [m]
     double cg_y_offset_m = 0.0;                   // |lateral CG offset| from centerline [m]
     double pkg_rotor_keepout_m = 0.0;             // retained; always 0 (keepout zones removed)

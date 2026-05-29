@@ -4,6 +4,7 @@
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 #include "pagmo/algorithm.hpp"
 #include "pagmo/algorithms/nsga2.hpp"
@@ -13,6 +14,36 @@
 #include "optimization/PagmoProblemAdapter.hpp"
 
 namespace hexaarch::optimization {
+namespace {
+
+double rawObjectiveValue(
+    const evaluation::EvaluationResult& evaluation,
+    const std::string& objective_name) {
+    if (objective_name == "combined") {
+        return evaluation.combined_objective;
+    }
+
+    for (const auto& objective : evaluation.objectives) {
+        if (objective.name == objective_name) {
+            return objective.value;
+        }
+    }
+
+    throw std::invalid_argument("Unknown objective name: " + objective_name);
+}
+
+std::vector<double> rawObjectiveVector(
+    const evaluation::EvaluationResult& evaluation,
+    const std::vector<std::string>& objective_names) {
+    std::vector<double> values;
+    values.reserve(objective_names.size());
+    for (const auto& name : objective_names) {
+        values.push_back(rawObjectiveValue(evaluation, name));
+    }
+    return values;
+}
+
+}  // namespace
 
 MooRunResult MooRunner::run(
     const core::HexacopterArchitecture& architecture,
@@ -85,14 +116,14 @@ MooRunResult MooRunner::run(
     result.baseline = adapter.evaluate(result.baseline_decision_vector);
 
     const auto xs = evolved.get_x();
-    const auto fs = evolved.get_f();
     result.population.reserve(xs.size());
     for (std::size_t index = 0; index < xs.size(); ++index) {
+        auto evaluation = adapter.evaluate(xs.at(index));
         auto point = MooPoint{
             index,
             std::vector<double>(xs.at(index).begin(), xs.at(index).end()),
-            std::vector<double>(fs.at(index).begin(), fs.at(index).end()),
-            adapter.evaluate(xs.at(index))
+            rawObjectiveVector(evaluation, config.objective_names),
+            std::move(evaluation)
         };
         if (point.evaluation.feasible) {
             result.has_feasible_points = true;

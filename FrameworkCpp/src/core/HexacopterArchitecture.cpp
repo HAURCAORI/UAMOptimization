@@ -391,7 +391,7 @@ void HexacopterArchitecture::registerDefaultConstraints() {
         0.0,
         true,
         true,
-        1000.0,
+        10000.0,
         [](const ConstraintEvaluationContext& context) {
             Constraint constraint{"rotor_clearance", context.architecture.id(), ConstraintSense::greater_equal, 0.0};
             return constraint.evaluate(context.physical_model.packaging.minimum_rotor_clearance);
@@ -404,7 +404,7 @@ void HexacopterArchitecture::registerDefaultConstraints() {
         0.0,
         true,
         true,
-        1000.0,
+        10000.0,
         [](const ConstraintEvaluationContext& context) {
             Constraint constraint{"packaging::payload_in_cabin", context.architecture.id(), ConstraintSense::less_equal, 0.0};
             return constraint.evaluate(context.physical_model.packaging.payload_containment_violation);
@@ -417,7 +417,7 @@ void HexacopterArchitecture::registerDefaultConstraints() {
         0.0,
         true,
         true,
-        1000.0,
+        10000.0,
         [](const ConstraintEvaluationContext& context) {
             Constraint constraint{"packaging::battery_in_cabin", context.architecture.id(), ConstraintSense::less_equal, 0.0};
             return constraint.evaluate(context.physical_model.packaging.battery_containment_violation);
@@ -430,7 +430,7 @@ void HexacopterArchitecture::registerDefaultConstraints() {
         0.0,
         true,
         true,
-        1000.0,
+        10000.0,
         [](const ConstraintEvaluationContext& context) {
             Constraint constraint{"packaging::battery_payload_nonoverlap", context.architecture.id(), ConstraintSense::less_equal, 0.0};
             return constraint.evaluate(context.physical_model.packaging.battery_payload_overlap);
@@ -443,7 +443,7 @@ void HexacopterArchitecture::registerDefaultConstraints() {
         0.0,
         true,
         true,
-        1000.0,
+        10000.0,
         [](const ConstraintEvaluationContext& context) {
             Constraint constraint{"packaging::occupant_in_cabin", context.architecture.id(), ConstraintSense::less_equal, 0.0};
             return constraint.evaluate(context.physical_model.packaging.occupant_containment_violation);
@@ -452,7 +452,7 @@ void HexacopterArchitecture::registerDefaultConstraints() {
     constraints_.add({
         "packaging::payload_components_nonoverlap",
         id_,
-        ConstraintSense::less_equal, 0.0, true, true, 1000.0,
+        ConstraintSense::less_equal, 0.0, true, true, 10000.0,
         [](const ConstraintEvaluationContext& context) {
             Constraint c{"packaging::payload_components_nonoverlap",
                 context.architecture.id(), ConstraintSense::less_equal, 0.0};

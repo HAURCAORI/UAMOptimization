@@ -1,203 +1,238 @@
 # FrameworkCpp Optimization Constraints And Design Variables
 
-This file is the detailed optimization-variable and hard-constraint reference for `FrameworkCpp`, based on the live code in `src/core`, `src/evaluation`, and `src/optimization`.
+Live reference derived from `src/core/HexacopterArchitecture.cpp`, `src/core/Elements.cpp`,
+and `include/evaluation/EvaluationContext.hpp`. See `docs/Optimization.md` for the overall
+evaluation flow and `docs/Phase2_Powertrain_Battery.md` for power/battery formula details.
 
-Use it together with:
+---
 
-- `docs/Optimization.md` for the overall evaluation and optimizer flow
-- `docs/Phase2_Powertrain_Battery.md` for Phase 2 power and battery formulas
+## Design variables (active parameters — 16 total)
 
-## Scope
+All parameters use `scale = 1.0`; pagmo sees bounds `[0, 1]` per variable.
 
-- Design variables are defined in `HexacopterArchitecture::registerDefaultParameters()`.
-- Hard constraints are defined partly in `HexacopterArchitecture::registerDefaultConstraints()` and partly by individual elements in `Elements.cpp`.
-- The optimizer only sees active parameters.
-- Feasibility is determined by nominal hover trim, all-fault hover requirements, and all active hard constraints.
+### Geometry and propulsion (4)
 
-## Optimization Design Variables
+| ID | Unit | Default | Bounds | Role |
+|---|---|---|---|---|
+| `hexa::Lx`    | m | 2.65  | [2.0, 5.0]      | Fore/aft arm length (motors 0,1,4,5) |
+| `hexa::Lyi`   | m | 2.65  | [2.0, 5.0]      | Inner lateral arm length |
+| `hexa::Lyo`   | m | 5.50  | [2.5, 9.0]      | Outer lateral arm length (motors 2,3) |
+| `hexa::T_max` | N | 12000 | [8000, 20000]   | Maximum thrust per motor |
 
-These parameters are active by default, so they are included in the pagmo design vector.
+Lower bounds on Lx, Lyi ≥ 2.0 m prevent arm_1256 = √(Lx²+Lyi²) from collapsing to
+1.4 m while Lyo→9 m (max arm-span ratio ≤ 3.2×). T_max ≥ 8000 N keeps motor-2-fault
+hover trim feasible at minimum geometry.
 
-| Name | Unit | Default | Bounds | Role |
-|---|---:|---:|---:|---|
-| `Lx` | m | 2.65 | [2.0, 5.0] | Fore/aft arm length |
-| `Lyi` | m | 2.65 | [2.0, 5.0] | Inner lateral arm length |
-| `Lyo` | m | 5.50 | [2.5, 9.0] | Outer lateral arm length |
-| `T_max` | N | 12000.0 | [8000.0, 20000.0] | Maximum thrust per motor |
-| `arm_outer_radius` | m | 0.08 | [0.02, 0.15] | Arm tube outer radius |
-| `arm_wall_thickness` | m | 0.005 | [0.001, 0.020] | Arm tube wall thickness |
-| `m_bat` | kg | 400.0 | [100.0, 1000.0] | Battery pack mass |
+### Structural cross-section (2)
 
-## Fixed But Registered Parameters
+| ID | Unit | Default | Bounds | Role |
+|---|---|---|---|---|
+| `hexa::arm_outer_radius`   | m | 0.08  | [0.02, 0.15]   | Arm tube outer radius |
+| `hexa::arm_wall_thickness` | m | 0.005 | [0.001, 0.020] | Arm tube wall thickness |
 
-These parameters exist in the architecture and affect evaluation, but they are inactive by default and therefore not optimized unless code/config changes activate them.
+At default geometry, baseline tip deflection ≈ 1.27 m (1270% over the 0.10 m limit).
+The optimizer must raise t_wall or reduce arm length to satisfy `arm_tip_deflection`.
 
-| Name | Unit | Default | Bounds | Role |
-|---|---:|---:|---:|---|
-| `cT` | - | 0.03 | [0.01, 0.08] | Yaw moment to thrust ratio |
-| `d_prop` | m | 0.40 | [0.20, 1.20] | Propeller diameter |
-| `m_payload` | kg | 800.0 | [400.0, 2000.0] | Payload mass |
+### Battery (1)
 
-## Design Vector Mapping
+| ID | Unit | Default | Bounds | Role |
+|---|---|---|---|---|
+| `hexa::m_bat` | kg | 400 | [100, 1000] | Battery pack mass |
 
-For each active parameter:
+400 kg baseline is severely undersized for the 30-minute mission (≈ 80 kWh available vs
+≈ 140 kWh required at baseline power). Optimizer converges toward 650–900 kg.
 
-```text
-normalized = ((value - lower_bound) / (upper_bound - lower_bound)) * scale
-value = lower_bound + (upper_bound - lower_bound) * (normalized / scale)
-```
+### Passenger placement (3)
 
-Current parameters use `scale = 1.0`, so pagmo sees a normalized search box of `[0, 1]` per active variable.
+| ID | Unit | Default | Bounds | Notes |
+|---|---|---|---|---|
+| `hexa::pax_x` | m | 0.00 | [−0.25, +0.25] | Fore/aft (forward = +x) |
+| `hexa::pax_y` | m | 0.00 | [−0.42, +0.42] | Lateral (right = +y) |
+| `hexa::pax_z` | m | −0.10 | [−0.50, +0.40] | Vertical (NED: −z = toward ceiling) |
 
-The optimizer stores and exports physical bounds separately:
+Default pax_z = −0.10 m places the 4-seat group center 0.10 m above the hub plane.
+Group z-extent at default: [−0.70, +0.50] m (ceiling → mid-cabin). Symmetric in x and y.
 
-- `OptimizationProblem.lower_bounds[i] = parameter.lower_bound`
-- `OptimizationProblem.upper_bounds[i] = parameter.upper_bound`
+### Cargo placement (3)
 
-## Constraint Structure
+| ID | Unit | Default | Bounds | Notes |
+|---|---|---|---|---|
+| `hexa::cargo_x` | m | 0.00 | [−0.50, +0.50] | |
+| `hexa::cargo_y` | m | 0.00 | [−0.45, +0.45] | |
+| `hexa::cargo_z` | m | +0.75 | [+0.30, +1.00] | +z = below hub (floor zone) |
 
-All listed constraints below are hard constraints with penalties applied through `PagmoProblemAdapter::constraintPenalty()`.
+Default cargo_z = +0.75 m places the cargo slab in the cabin floor zone, 0.07 m below
+the passenger group bottom (z = +0.50). Stays within the cabin (half-z = 1.10 m).
 
-If a constraint is registered once per element, the same stable ID appears multiple times with different owners.
+### Battery placement (3)
 
-## System-Level Hard Constraints
+| ID | Unit | Default | Bounds | Notes |
+|---|---|---|---|---|
+| `hexa::bat_x` | m | 0.00 | [−0.50, +0.50] | Symmetric |
+| `hexa::bat_y` | m | 0.00 | [−0.55, +0.55] | Symmetric |
+| `hexa::bat_z` | m | −0.90 | [−1.00, +0.85] | −z = ceiling zone |
 
-| Stable ID | Sense | Threshold | Penalty | Meaning |
-|---|---|---:|---:|---|
-| `parameter_bounds` | `<=` | 0.0 | 1000 | Maximum parameter over/under-bound violation must be zero |
-| `minimum_geometry_margin` | `>=` | 0.0 | 1000 | Enforces `min(Lx - min_arm_length, Lyi - min_arm_length, Lyo - (Lyi + min_outer_arm_delta)) >= 0` |
-| `rotor_clearance` | `>=` | 0.0 | 1000 | Minimum rotor-to-rotor geometric clearance must be nonnegative |
-| `failed_hover_gamma` | `>=` | 1.5 | 2000 | Worst single-fault thrust margin must exceed `gamma_thrust_required` |
-| `fault_allocation_ratio` | `>=` | 0.05 | 1500 | `sigma_worst / sigma_reference >= minimum_fault_allocation_ratio` |
-| `arm_yield_failure` | `>=` | 1.5 | 2000 | Minimum structural safety factor across arms must exceed `minimum_arm_safety_factor` |
-| `battery_energy_reserve` | `>=` | 0.0 | 2000 | Battery available energy must exceed nominal plus emergency mission demand |
-| `battery_crate_limit` | `<=` | 0.0 | 1500 | Enforces `(bat_c_rate / battery_crate_limit) - 1 <= 0` |
-| `all_faults_hover_feasible` | `>=` | 0.0 | 20000 | ACS-based worst-fault hover margin must be nonnegative when enabled |
-| `fault_directional_margin` | `>=` | 0.0 | 5000 | ACS worst-fault directional margin must exceed `eps_acs_fault_margin` |
+Lower bound −1.00 keeps slim slab (half_z ≤ 0.08 m) inside cabin ceiling at −1.10 m.
+The `packaging::battery_in_cabin` constraint enforces this continuously.
 
-## Element-Level Hard Constraints
+---
 
-### Body
+## Fixed (inactive) parameters
 
-| Stable ID | Sense | Threshold | Penalty | Meaning |
-|---|---|---:|---:|---|
-| `body_span_order` | `>=` | 0.0 | 1000 | `min(Lx, Lyi, Lyo - Lyi) >= 0` |
+| ID | Unit | Default | Reason |
+|---|---|---|---|
+| `hexa::cT`           | —  | 0.03 | MATLAB reference; yaw-torque cT only |
+| `hexa::d_prop`       | m  | 0.40 | Visual/cT scaling; powertrain uses r_eff |
+| `hexa::m_pax`        | kg | 600  | Fixed UAM mission requirement |
+| `hexa::m_cargo`      | kg | 200  | Fixed UAM mission requirement |
+| `hexa::m_instrument` | kg | 50   | Fixed avionics mass |
 
-### Payload
+Total fixed payload mass: 600 + 200 + 50 = **850 kg**.
 
-| Stable ID | Sense | Threshold | Penalty | Meaning |
-|---|---|---:|---:|---|
-| `payload_mass_nonnegative` | `>=` | 0.0 | 1000 | `m_payload >= 0` |
+---
 
-### Battery
+## Hard constraints
 
-| Stable ID | Sense | Threshold | Penalty | Meaning |
-|---|---|---:|---:|---|
-| `battery_mass_positive` | `>=` | 0.0 | 500 | `m_bat >= 0` |
+### Architecture-level (`registerDefaultConstraints`)
 
-### Arms
+| Stable ID | Sense | Threshold | Penalty | Expression |
+|---|---|---|---|---|
+| `parameter_bounds` | ≤ | 0 | 1 000 | max over-bound violation across all params |
+| `minimum_geometry_margin` | ≥ | 0 | 1 000 | min(Lx − 0.5, Lyi − 0.5, Lyo − Lyi − 0.1) |
+| `rotor_clearance` | ≥ | 0 | 1 000 | min inter-rotor disk clearance [m] |
+| `packaging::payload_in_cabin` | ≤ | 0 | 1 000 | max containment violation: pax/cargo/instrument in cabin |
+| `packaging::battery_in_cabin` | ≤ | 0 | 1 000 | battery containment violation in cabin |
+| `packaging::battery_payload_nonoverlap` | ≤ | 0 | 1 000 | max(bat∩pax, bat∩cargo, bat∩instr) overlap |
+| `packaging::occupant_in_cabin` | ≤ | 0 | 1 000 | occupant envelope in cabin |
+| `packaging::payload_components_nonoverlap` | ≤ | 0 | 1 000 | max(pax∩cargo, pax∩instr, cargo∩instr) overlap |
+| `cg_envelope` | ≤ | 0 | 800 | max(\|CG_x\| − 0.40, \|CG_y\| − 0.25) [m] |
+| `failed_hover_gamma` | ≥ | 1.5 | 2 000 | γ_worst = 5·T_max / (m·g) |
+| `fault_allocation_ratio` | ≥ | 0.05 | 1 500 | σ_worst / σ_ref |
+| `arm_yield_failure` | ≥ | 1.5 | 2 000 | struct_net_min_safety_factor (Phase 3 network) |
+| `battery_energy_reserve` | ≥ | 0 | 2 000 | (E_avail − E_req) / E_avail |
+| `battery_crate_limit` | ≤ | 0 | 1 500 | bat_c_rate / 5.0 − 1 |
+| `arm_tip_deflection` | ≤ | 0 | 1 500 | (δ_max / 0.10 m) − 1 |
+| `arm_tip_rotation` | ≤ | 0 | 1 500 | (θ_max / 0.10 rad) − 1 |
+| `all_faults_hover_feasible` | ≥ | 0 | 20 000 | acs_hover_margin = T_max / T_hover_worst − 1 |
+| `fault_directional_margin` | ≥ | 0 | 5 000 | (acs_worst_fault_min_margin − 50) / 50 |
 
-Registered once per arm.
+Notes:
+- `cg_envelope` checks **both** fore/aft (\|CG_x\| ≤ 0.40 m) and lateral (\|CG_y\| ≤ 0.25 m).
+- `arm_yield_failure` reads from `StructuralNetworkAnalyzer` (Phase 3), not the legacy `StructuralAnalyzer`.
+- `all_faults_hover_feasible` has the highest penalty (20 000) — LP hover feasibility is the primary gate.
+- `fault_directional_margin` penalty 5 000 < 20 000 so LP feasibility takes priority in the search.
+- Packaging constraints use the world-frame AABB of each element's `localEnvelope()`, transformed by
+  the assembled `world_pose`. Elements own their placement via `local_pose_` (no attachment lambda).
 
-| Stable ID | Sense | Threshold | Penalty | Meaning |
-|---|---|---:|---:|---|
-| `arm_length_positive` | `>=` | 0.0 | 750 | Each arm length must be nonnegative |
+### Element-level constraints
 
-Arm length depends on rotor index:
+| Stable ID | Owner | Sense | Threshold | Penalty | Expression |
+|---|---|---|---|---|---|
+| `body_span_order` | body | ≥ | 0 | 1 000 | min(Lx, Lyi, Lyo − Lyi) |
+| `battery_mass_positive` | battery | ≥ | 0 | 500 | m_bat |
+| `arm_length_positive` | arm_i (×6) | ≥ | 0 | 750 | L_arm(i) |
+| `motor_thrust_positive` | motor_i (×6) | ≥ | 0 | 1 000 | T_max |
+| `rotor_diameter_positive` | rotor_i (×6) | ≥ | 0 | 750 | d_prop |
 
-```text
-outer lateral arms (indices 2, 3): L_arm = Lyo
-diagonal arms (indices 0, 1, 4, 5): L_arm = sqrt(Lx^2 + Lyi^2)
-```
+Arm lengths: diagonal arms (0,1,4,5) L = √(Lx²+Lyi²); outer lateral arms (2,3) L = Lyo.
 
-### Motors
+---
 
-Registered once per motor.
+## EvaluationContext configuration
 
-| Stable ID | Sense | Threshold | Penalty | Meaning |
-|---|---|---:|---:|---|
-| `motor_thrust_positive` | `>=` | 0.0 | 1000 | `T_max >= 0` |
+All constraint thresholds and model parameters live in `EvaluationContext`. Key defaults:
 
-### Rotors
-
-Registered once per rotor.
-
-| Stable ID | Sense | Threshold | Penalty | Meaning |
-|---|---|---:|---:|---|
-| `rotor_diameter_positive` | `>=` | 0.0 | 750 | `d_prop >= 0` |
-
-## Constraint Inputs And Evaluation Context
-
-The most important configuration values used by constraints are in `EvaluationContext`:
-
-| Context field | Default | Used by |
-|---|---:|---|
+| Field | Default | Consumed by |
+|---|---|---|
 | `gamma_thrust_required` | 1.5 | `failed_hover_gamma`, `fault_thrust` objective |
 | `minimum_fault_allocation_ratio` | 0.05 | `fault_allocation_ratio` |
 | `minimum_arm_length` | 0.5 m | `minimum_geometry_margin` |
 | `minimum_outer_arm_delta` | 0.1 m | `minimum_geometry_margin` |
-| `minimum_arm_safety_factor` | 1.5 | `arm_yield_failure`, `structural_safety` objective |
-| `require_all_fault_acs_feasible` | `true` | `all_faults_hover_feasible` |
-| `eps_acs_fault_margin` | 50.0 | `fault_directional_margin` |
-| `battery_crate_limit` | 5.0 | `battery_crate_limit` |
-| `mission_time_nominal_min` | 6.0 min | `battery_energy_reserve` |
+| `minimum_arm_safety_factor` | 1.5 | `arm_yield_failure` |
+| `arm_tip_deflection_limit_m` | 0.10 m | `arm_tip_deflection` |
+| `arm_tip_rotation_limit_rad` | 0.10 rad | `arm_tip_rotation` |
+| `eps_acs_fault_margin` | 50.0 Nm | `fault_directional_margin` |
+| `require_all_fault_acs_feasible` | true | `all_faults_hover_feasible` |
+| `battery_crate_limit` | 5.0 h⁻¹ | `battery_crate_limit` |
+| `mission_time_nominal_min` | **30.0 min** | `battery_energy_reserve` |
 | `mission_time_emergency_min` | 1.0 min | `battery_energy_reserve` |
-| `battery_specific_energy_wh_per_kg` | 250.0 | battery energy model |
-| `battery_dod_usable` | 0.85 | battery energy model |
-| `battery_pack_efficiency` | 0.95 | battery energy model |
-| `power_auxiliary_w` | 500.0 W | battery energy and C-rate model |
+| `battery_specific_energy_wh_per_kg` | 250.0 | BatteryEvaluator |
+| `battery_dod_usable` | 0.85 | BatteryEvaluator |
+| `battery_pack_efficiency` | 0.95 | BatteryEvaluator |
+| `power_auxiliary_w` | 500 W | BatteryEvaluator, C-rate |
+| `cg_envelope_half_x` | 0.40 m | `cg_envelope` |
+| `cg_envelope_half_y` | 0.25 m | `cg_envelope` |
+| `figure_of_merit` | 0.65 | PowertrainEvaluator, CruisePowerModel |
+| `motor_efficiency` | 0.85 | PowertrainEvaluator |
+| `esc_efficiency` | 0.95 | PowertrainEvaluator |
+| `parasite_drag_area_m2` | 0.6 m² | CruisePowerModel (mission mode) |
+| `mission_profile` | null | MissionEvaluator (optional) |
 
-## Feasibility Rule
+---
 
-A candidate is marked feasible only if all of the following hold:
+## Objectives
 
-1. Nominal hover trim is feasible.
-2. All-fault hover trim is feasible when `require_all_fault_acs_feasible == true`.
-3. Every active hard constraint evaluates feasible.
+### Weighted-sum SOO objective
 
-If not feasible, the pagmo adapter applies:
-
-```text
-objective = 1e6 + summed_constraint_penalty + extra_infeasibility_penalty
+```
+J = Σ(w_i · f_i) / Σ(w_i)
 ```
 
-with an additional `1e4` added whenever `result.feasible == false`, plus each violated constraint's own weighted penalty contribution.
+| Objective | Weight | Formula | What it minimizes |
+|---|---|---|---|
+| `mass` | 0.20 | m_total / 2240.73 | Total vehicle mass |
+| `power` | 0.20 | P_nom_w / P_ref_w | Hover power (actuator-disk) |
+| `fault_thrust` | 0.25 | max(0, 1.5 − γ_worst)² | Thrust margin shortfall |
+| `fault_alloc` | 0.25 | σ_ref / σ_worst | Control authority degradation |
+| `hover_nom` | 0.10 | (T_avg / T_max)² | Nominal rotor saturation |
+| `acs_margin_penalty` | 0.10 | max(0, −m_min) / (m·g) | ACS margin violation |
+| `structural` | 0.00 | BI_norm | Bending index (analysis only) |
+| `packaging` | 0.00 | rotor overlap penalty | Rotor overlap (analysis only) |
+| `structural_safety` | 0.00 | SF_target / SF_actual | Structural safety ratio (analysis only) |
 
-## Objectives Relevant To Optimization
+Objective key name `acs_margin_penalty` must match exactly in `EvaluationContext::objective_weights`.
 
-The question was about variables and constraints, but the constraint set is easier to interpret with the active objective set:
+### Infeasibility penalty
 
-| Objective | Default weight | Notes |
-|---|---:|---|
-| `mass` | 0.20 | Total vehicle mass normalized by reference mass |
-| `power` | 0.20 | Hover power proxy normalized by baseline |
-| `fault_thrust` | 0.25 | Squared shortfall below required fault thrust margin |
-| `fault_alloc` | 0.25 | Baseline-to-current scaled control effectiveness ratio |
-| `hover_nom` | 0.10 | Nominal hover thrust utilization proxy |
-| `acs_margin` | 0.10 | Penalty based on negative ACS overall margin |
-| `structural` | 0.0 | Computed but inactive by default |
-| `packaging` | 0.0 | Computed but inactive by default |
-| `structural_safety` | 0.0 | Computed but inactive by default |
-
-For MOO runs, `main.cpp` currently uses:
-
-```text
-mass, power, fault_alloc
+```
+J_infeasible = 1e6 + Σ(penalty_i · |violation_i|) + 1e4
 ```
 
-## Practical Reading
+The extra 1e4 is added whenever `result.feasible == false`, providing a discontinuous
+jump at the feasibility boundary that CMA-ES can detect.
 
-In the current codebase, the optimization problem is effectively:
+### MOO objective set (CLI default)
 
-- Geometry sizing: `Lx`, `Lyi`, `Lyo`
-- Propulsion sizing: `T_max`
-- Structural sizing: `arm_outer_radius`, `arm_wall_thickness`
-- Energy sizing: `m_bat`
+`mass`, `power`, `fault_alloc` — three objectives forming a tractable Pareto front.
+Configurable via `MooRunConfig::objective_names` or the `--moo-*` CLI flags.
 
-subject to:
+---
 
-- geometry and clearance constraints,
-- fault-hover and controllability constraints,
-- structural arm safety constraints,
-- battery energy reserve and C-rate constraints,
-- and basic nonnegativity / bound consistency constraints.
+## Feasibility rule
+
+A design is **feasible** when all of the following hold:
+
+1. Nominal hover trim LP is solvable.
+2. All 6 single-motor-fault hover trims are solvable.
+3. Every active hard constraint is feasible.
+
+Conditions 1 and 2 are tested directly in `Stage1Evaluator`. Condition 3 is evaluated
+by `ConstraintRegistry`. Any violation in any condition sets `result.feasible = false`.
+
+---
+
+## Practical interpretation of the active problem
+
+The optimizer jointly sizes:
+
+| Group | Variables | Driven by constraints |
+|---|---|---|
+| Geometry | Lx, Lyi, Lyo, T_max | `minimum_geometry_margin`, `rotor_clearance`, `all_faults_hover_feasible`, `failed_hover_gamma`, `fault_directional_margin` |
+| Structure | arm_outer_radius, arm_wall_thickness | `arm_yield_failure`, `arm_tip_deflection`, `arm_tip_rotation` |
+| Energy | m_bat | `battery_energy_reserve`, `battery_crate_limit` |
+| Placement | pax_x/y/z, cargo_x/y/z, bat_x/y/z | `packaging::*`, `cg_envelope` |
+
+The energy group (m_bat) and geometry group (T_max, Lx, Lyi, Lyo) are coupled through the
+hover power model: larger arms → larger r_eff → lower induced velocity → lower hover power
+→ smaller battery requirement. The optimizer trades arm length against battery mass under
+the structural (SF, deflection) and ACS (fault hover, directional margin) constraints.

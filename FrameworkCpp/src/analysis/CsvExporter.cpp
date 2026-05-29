@@ -21,23 +21,19 @@ std::string shortParamName(const std::string& stable_id) {
 }
 
 const optimization::MooPoint* representativeMooPoint(const optimization::MooRunResult& result) {
-    if (result.population.empty()) {
+    if (result.feasible_population.empty()) {
         return nullptr;
     }
 
     const auto summary = ParetoAnalyzer{}.analyze(result);
     const auto knee_it = std::find_if(
-        result.population.begin(), result.population.end(),
+        result.feasible_population.begin(), result.feasible_population.end(),
         [&](const optimization::MooPoint& p) { return p.population_index == summary.knee_index; });
-    if (knee_it != result.population.end()) {
+    if (knee_it != result.feasible_population.end()) {
         return &*knee_it;
     }
 
-    if (!result.feasible_population.empty()) {
-        return &result.feasible_population.front();
-    }
-
-    return &result.population.front();
+    return &result.feasible_population.front();
 }
 
 double denormalizeParameter(
@@ -133,6 +129,9 @@ nlohmann::json stage1ToJson(const evaluation::Stage1Metrics& m) {
         {"pkg_payload_containment_m",       m.pkg_payload_containment_m},
         {"pkg_battery_containment_m",       m.pkg_battery_containment_m},
         {"pkg_battery_payload_overlap_m",   m.pkg_battery_payload_overlap_m},
+        {"pkg_payload_internal_overlap_m",  m.pkg_payload_internal_overlap_m},
+        {"cabin_internal_clearance_m",      m.cabin_internal_clearance_m},
+        {"cabin_space_penalty",             m.cabin_space_penalty},
         {"pkg_occupant_containment_m",      m.pkg_occupant_containment_m},
         {"cg_y_offset_m",                   m.cg_y_offset_m},
         {"pkg_rotor_keepout_m",             m.pkg_rotor_keepout_m}
@@ -358,6 +357,7 @@ bool CsvExporter::writeParetoCsv(
            << " generated=" << currentTimestamp() << '\n';
 
     const auto summary = ParetoAnalyzer{}.analyze(result);
+    const bool has_knee = !summary.nondominated_indices.empty();
 
     stream << "population_index,is_nondominated,is_knee,feasible,combined_objective,gamma_worst,sigma_worst,min_safety_factor,acs_PFWAR,acs_WCFR,acs_FII,acs_hover_margin,acs_hover_slice_worst_fault_margin";
     for (const auto& name : result.objective_names) {
@@ -372,7 +372,7 @@ bool CsvExporter::writeParetoCsv(
 
         stream << point.population_index << ','
                << (is_nondominated ? "true" : "false") << ','
-               << (summary.knee_index == point.population_index ? "true" : "false") << ','
+               << (has_knee && summary.knee_index == point.population_index ? "true" : "false") << ','
                << (point.evaluation.feasible ? "true" : "false") << ','
                << point.evaluation.combined_objective << ','
                << point.evaluation.stage1.gamma_worst << ','

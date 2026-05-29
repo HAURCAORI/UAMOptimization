@@ -79,6 +79,7 @@ struct EvaluationContext {
         {"fault_thrust", 0.25},
         {"fault_alloc", 0.25},
         {"hover_nom", 0.10},
+        {"cabin_space_penalty", 0.10},
         {"structural", 0.0},
         {"packaging", 0.0},
         {"structural_safety", 0.0},

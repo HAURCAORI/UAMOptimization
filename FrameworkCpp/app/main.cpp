@@ -702,9 +702,13 @@ int runSooWithVisualization(
         config.population_size = options.soo_population_size;
         config.generations = options.soo_generations;
         config.on_generation = [&](unsigned gen, unsigned total, const std::vector<double>& best_x) {
-            app.postArchitecture(
-                architectureFromDecisionVector(best_x),
-                "HexaArch SOO  Gen " + std::to_string(gen) + "/" + std::to_string(total));
+            const auto candidate = architectureFromDecisionVector(best_x);
+            const auto evaluation = hexaarch::evaluation::ArchitectureEvaluator{}.evaluate(candidate, context);
+            if (evaluation.feasible) {
+                app.postArchitecture(
+                    candidate,
+                    "HexaArch SOO  Feasible Gen " + std::to_string(gen) + "/" + std::to_string(total));
+            }
         };
         if (!ensureOutputDirectory(options.output_dir)) { return; }
         const auto result = hexaarch::optimization::SooRunner{}.run(architecture, context, config);
@@ -753,9 +757,13 @@ int runMooWithVisualization(
         config.generations = options.moo_generations;
         config.objective_names = {"mass", "power", "fault_alloc"};
         config.on_generation = [&](unsigned gen, unsigned total, const std::vector<double>& best_x) {
-            app.postArchitecture(
-                architectureFromDecisionVector(best_x),
-                "HexaArch MOO  Gen " + std::to_string(gen) + "/" + std::to_string(total));
+            const auto candidate = architectureFromDecisionVector(best_x);
+            const auto evaluation = hexaarch::evaluation::ArchitectureEvaluator{}.evaluate(candidate, context);
+            if (evaluation.feasible) {
+                app.postArchitecture(
+                    candidate,
+                    "HexaArch MOO  Feasible Gen " + std::to_string(gen) + "/" + std::to_string(total));
+            }
         };
         if (!ensureOutputDirectory(options.output_dir)) { return; }
         const auto result = hexaarch::optimization::MooRunner{}.run(architecture, context, config);
@@ -793,10 +801,8 @@ int runVisualizerFromSooJson(const std::filesystem::path& json_path) {
     std::vector<double> dv;
     if (doc.contains("best_feasible_decision_vector") && !doc["best_feasible_decision_vector"].is_null()) {
         dv = doc["best_feasible_decision_vector"].get<std::vector<double>>();
-    } else if (doc.contains("best_decision_vector")) {
-        dv = doc["best_decision_vector"].get<std::vector<double>>();
     } else {
-        std::cerr << "No decision vector found in: " << json_path << '\n';
+        std::cerr << "No feasible SOO solution in: " << json_path << '\n';
         return 1;
     }
 

@@ -20,6 +20,7 @@ const std::vector<MetricDescriptor>& stage1MetricDescriptors() {
         {"fault_alloc",                        MetricRole::soft_objective,   ""},
         {"hover_nom",                          MetricRole::soft_objective,   ""},
         {"acs_margin_penalty",                 MetricRole::soft_objective,   ""},
+        {"cabin_space_penalty",                MetricRole::soft_objective,   ""},
 
         // --- Zero-weight objectives (analysis role in practice) ---
         {"structural",                         MetricRole::analysis_only,    ""},
@@ -85,6 +86,7 @@ const std::vector<MetricDescriptor>& stage1MetricDescriptors() {
         {"pkg_battery_containment_m",          MetricRole::hard_constraint,  "m"},
         {"pkg_battery_payload_overlap_m",      MetricRole::hard_constraint,  "m"},
         {"pkg_payload_internal_overlap_m",     MetricRole::hard_constraint,  "m"},
+        {"cabin_internal_clearance_m",         MetricRole::analysis_only,    "m"},
         {"pkg_occupant_containment_m",         MetricRole::hard_constraint,  "m"},
         {"cg_y_offset_m",                      MetricRole::hard_constraint,  "m"},
         {"pkg_rotor_keepout_m",                MetricRole::analysis_only,    "m"},

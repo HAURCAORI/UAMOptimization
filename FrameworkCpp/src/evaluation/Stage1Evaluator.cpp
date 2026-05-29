@@ -245,6 +245,8 @@ EvaluationResult Stage1Evaluator::evaluate(
     result.stage1.pkg_battery_containment_m     = result.physical_model.packaging.battery_containment_violation;
     result.stage1.pkg_battery_payload_overlap_m = result.physical_model.packaging.battery_payload_overlap;
     result.stage1.pkg_payload_internal_overlap_m = result.physical_model.packaging.payload_internal_overlap;
+    result.stage1.cabin_internal_clearance_m    = result.physical_model.packaging.cabin_internal_clearance;
+    result.stage1.cabin_space_penalty           = result.physical_model.packaging.cabin_space_penalty;
     result.stage1.pkg_occupant_containment_m    = result.physical_model.packaging.occupant_containment_violation;
     result.stage1.cg_y_offset_m                 = std::abs(result.physical_model.mass_properties.center_of_mass.y());
     result.stage1.pkg_rotor_keepout_m           = result.physical_model.packaging.rotor_keepout_intrusion_m;

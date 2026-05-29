@@ -2,6 +2,7 @@
 
 #include <limits>
 #include <optional>
+#include <vector>
 
 #include "core/ElementCapabilities.hpp"
 #include "physics/PrimitiveDistance.hpp"
@@ -124,6 +125,31 @@ void ArchitecturePackagingEvaluator::analyze(
     if (cargo_world.has_value() && inst_world.has_value())
         internal_overlap = std::max(internal_overlap, cargo_world->overlapMagnitude(*inst_world));
     model.packaging.payload_internal_overlap = internal_overlap;
+
+    std::vector<double> clearances;
+    auto addClearance = [&](const std::optional<core::LocalAABB>& lhs,
+                            const std::optional<core::LocalAABB>& rhs) {
+        if (!lhs.has_value() || !rhs.has_value()) {
+            return;
+        }
+        const double clearance = lhs->separationDistance(*rhs);
+        if (clearance > 0.0) {
+            clearances.push_back(clearance);
+        }
+    };
+    addClearance(bat_world, pax_world);
+    addClearance(bat_world, cargo_world);
+    addClearance(bat_world, inst_world);
+    addClearance(pax_world, cargo_world);
+    addClearance(pax_world, inst_world);
+    addClearance(cargo_world, inst_world);
+
+    model.packaging.cabin_internal_clearance = clearances.empty()
+        ? 0.0
+        : *(std::min_element(clearances.begin(), clearances.end()));
+    constexpr double kComfortableClearanceM = 0.25;
+    model.packaging.cabin_space_penalty =
+        kComfortableClearanceM / (kComfortableClearanceM + model.packaging.cabin_internal_clearance);
 
     // Zero out keepout fields (no longer checked)
     model.packaging.rotor_keepout_intrusion_m = 0.0;

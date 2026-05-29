@@ -21,6 +21,7 @@ double ObjectiveAggregator::aggregate(EvaluationResult& result, const Evaluation
     append("hover_nom", result.stage1.hover_nom);
     append("structural", result.stage1.structural);
     append("packaging", result.stage1.packaging);
+    append("cabin_space_penalty", result.stage1.cabin_space_penalty);
     append("structural_safety", result.stage1.structural_safety);
     append("acs_margin_penalty", result.stage1.acs_margin_penalty);
 

@@ -41,12 +41,6 @@ constexpr double kBatteryPackDensity = 1500.0;  // [kg/m³] — Li-ion pack incl
 constexpr double kBatterySlabHalfX   = 0.65;    // fore/aft half-extent [m] → 1.30 m total
 constexpr double kBatterySlabHalfY   = 0.75;    // lateral half-extent [m]  → 1.50 m total
 constexpr double kBatteryBoxPadding  = 0.02;    // visual/envelope clearance margin [m]
-// Max half-z: the battery is a SLIM ceiling slab. The physics (energy, mass) are correct; the
-// height cap keeps the visual representation thin even as m_bat grows. At the cap the slab is
-// 0.16 m tall, which represents ~360 kg of pack at 1500 kg/m³ with this plan area.
-// For heavier batteries the slab appears at maximum thickness — the optimizer still sees the
-// correct energy and C-rate constraints from m_bat, not from the visual height.
-constexpr double kBatteryMaxHalfZ   = 0.08;    // slim ceiling slab: max height = 0.16 m
 
 // CabinEnvelopeElement — passenger cabin inner hull [m].
 // 2.20 m total height gives realistic standing headroom relative to the mannequin reference asset.
@@ -367,12 +361,10 @@ void BatteryElement::updateFromParameters() {
     local_pose_ = Eigen::Isometry3d::Identity();
     local_pose_.translation() = Eigen::Vector3d(bat_x_->value, bat_y_->value, bat_z_->value);
 
-    // Physics-based height capped for slim appearance.
-    // True volume = m_bat/density gives half_z_uncapped; cap at kBatteryMaxHalfZ keeps the slab
-    // visually thin. The packaging envelope and constraint still use half_z_ for correctness.
+    // Physical height from pack volume. Packaging constraints use this same envelope, so large
+    // battery masses cannot hide in a fixed-thickness visual slab.
     const double volume = std::max(m_bat_->value, 1.0) / kBatteryPackDensity;
-    const double hz_uncapped = volume / (4.0 * kBatterySlabHalfX * kBatterySlabHalfY);
-    half_z_ = std::min(hz_uncapped, kBatteryMaxHalfZ);
+    half_z_ = volume / (4.0 * kBatterySlabHalfX * kBatterySlabHalfY);
 
     // Primitive in element-local frame; local_pose_ carries the world offset.
     primitives_ = {GeometryPrimitive::makeBox(

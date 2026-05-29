@@ -9,7 +9,7 @@ namespace hexaarch::analysis {
 
 ParetoSummary ParetoAnalyzer::analyze(const optimization::MooRunResult& result) const {
     ParetoSummary summary;
-    const auto& working_population = result.feasible_population.empty() ? result.population : result.feasible_population;
+    const auto& working_population = result.feasible_population;
     if (working_population.empty()) {
         return summary;
     }
@@ -109,6 +109,10 @@ std::string ParetoAnalyzer::summarize(const optimization::MooRunResult& result) 
            << ", feasible points=" << result.feasible_population.size()
            << "/" << result.population.size()
            << ", nondominated=" << summary.nondominated_indices.size();
+
+    if (summary.nondominated_indices.empty()) {
+        return stream.str();
+    }
 
     const auto knee_it = std::find_if(
         result.population.begin(), result.population.end(),

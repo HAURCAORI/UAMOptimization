@@ -113,7 +113,7 @@ private:
     DesignParameter* bat_x_;
     DesignParameter* bat_y_;
     DesignParameter* bat_z_;
-    double half_z_ = 0.0;  // cached: volume / (4 × slab_half_x × slab_half_y), updated each call
+    double half_z_ = 0.0;  // cached physical half-height from pack volume, updated each call
 };
 
 class CabinEnvelopeElement final : public BasicSpatialElement, public IEnvelopeProvider {

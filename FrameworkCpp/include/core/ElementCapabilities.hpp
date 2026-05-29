@@ -36,6 +36,22 @@ struct LocalAABB {
         }
         return min_pen;
     }
+
+    // Returns the smallest positive axis gap if the boxes are separated, 0 if they overlap.
+    [[nodiscard]] double separationDistance(const LocalAABB& other) const {
+        double min_gap = 1e30;
+        bool separated = false;
+        for (int i = 0; i < 3; ++i) {
+            const double gap = std::max(
+                other.min_corner[i] - max_corner[i],
+                min_corner[i] - other.max_corner[i]);
+            if (gap > 0.0) {
+                separated = true;
+                min_gap = std::min(min_gap, gap);
+            }
+        }
+        return separated ? min_gap : 0.0;
+    }
 };
 
 // Implemented by elements that define a spatial containment envelope (hub, fuselage, bay).

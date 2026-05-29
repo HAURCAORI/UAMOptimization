@@ -80,6 +80,8 @@ struct PackagingReport {
     double battery_containment_violation = 0.0;  // > 0 = battery protrudes outside cabin [m]
     double battery_payload_overlap = 0.0;        // > 0 = battery–payload penetration depth [m]
     double payload_internal_overlap = 0.0;       // > 0 = two payload components overlap [m]
+    double cabin_internal_clearance = 0.0;       // min positive clearance between packed cabin elements [m]
+    double cabin_space_penalty = 0.0;            // soft objective; lower is roomier
     double occupant_containment_violation = 0.0; // > 0 = occupant envelope protrudes outside cabin [m]
     double rotor_keepout_intrusion_m = 0.0;           // retained; always 0 (keepout zones removed)
     std::string rotor_keepout_offending_zone_id;

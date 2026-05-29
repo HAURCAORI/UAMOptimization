@@ -15,6 +15,14 @@ double sanitizeObjectiveValue(const double value) {
     return value;
 }
 
+double penalizedObjectiveValue(const double objective, const evaluation::EvaluationResult& result, const double penalty) {
+    const double value = sanitizeObjectiveValue(objective);
+    if (result.feasible) {
+        return value + penalty;
+    }
+    return value + kInfeasibleBasePenalty + penalty + kInfeasibleBasePenalty;
+}
+
 }  // namespace
 
 PagmoProblemAdapter::PagmoProblemAdapter(
@@ -30,16 +38,15 @@ PagmoProblemAdapter::PagmoProblemAdapter(
 pagmo::vector_double PagmoProblemAdapter::fitness(const pagmo::vector_double& x) const {
     const auto result = evaluate(x);
     const auto penalty = constraintPenalty(architecture_, result);
-    const auto infeasible = infeasiblePenalty(result, penalty);
 
     if (use_weighted_sum_) {
-        return {result.feasible ? sanitizeObjectiveValue(result.combined_objective) + penalty : infeasible};
+        return {penalizedObjectiveValue(result.combined_objective, result, penalty)};
     }
 
     std::vector<double> values;
     values.reserve(objective_names_.size());
     for (const auto& objective_name : objective_names_) {
-        values.push_back(result.feasible ? sanitizeObjectiveValue(objectiveValue(result, objective_name)) + penalty : infeasible);
+        values.push_back(penalizedObjectiveValue(objectiveValue(result, objective_name), result, penalty));
     }
     return values;
 }
@@ -99,7 +106,7 @@ double PagmoProblemAdapter::constraintPenalty(
     const evaluation::EvaluationResult& result) const {
     double penalty = 0.0;
     for (const auto& constraint_result : result.constraint_results) {
-        if (!constraint_result.active || constraint_result.evaluation.feasible) {
+        if (!constraint_result.active || !constraint_result.hard || constraint_result.evaluation.feasible) {
             continue;
         }
 
