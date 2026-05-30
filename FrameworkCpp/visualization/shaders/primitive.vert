@@ -32,6 +32,7 @@ layout(set = 0, binding = 0) uniform GlobalUniforms {
     float    shadow_bias;
     float    _pad3;
     float    _pad4;
+    vec4     ambient_ground;
 } ubo;
 
 layout(push_constant) uniform PushConstants {

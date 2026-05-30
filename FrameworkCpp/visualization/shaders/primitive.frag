@@ -31,6 +31,7 @@ layout(set = 0, binding = 0) uniform GlobalUniforms {
     float    shadow_bias;            // depth offset to prevent self-shadowing
     float    _pad3;
     float    _pad4;
+    vec4     ambient_ground;         // rgb = environment ground tint (hemisphere lower half)
 } ubo;
 
 layout(set = 0, binding = 1) uniform sampler2D    albedoTex;
@@ -200,8 +201,12 @@ void main() {
     float roughness = (push.use_pbr != 0) ? clamp(orm.g, 0.04, 1.0) : push.roughness;
     float metallic  = (push.use_pbr != 0) ? clamp(orm.b, 0.0,  1.0) : push.metallic;
 
-    // Ambient (unshadowed).
-    vec3 result = ubo.ambient_color.rgb * ubo.ambient_color.a * albedo;
+    // Hemispheric environment ambient (unshadowed): sky tint on up-facing surfaces,
+    // ground tint on down-facing ones. ambient_color.rgb = sky env, .a = intensity;
+    // ambient_ground.rgb = ground env. Both are CPU-derived from the active skybox.
+    float hemi        = clamp(normal.z * 0.5 + 0.5, 0.0, 1.0);
+    vec3  envAmbient  = mix(ubo.ambient_ground.rgb, ubo.ambient_color.rgb, hemi);
+    vec3  result      = envAmbient * ubo.ambient_color.a * albedo;
 
     // Shadow visibility for direct light contributions.
     float shadowVis = shadowTest(fragWorldPos);

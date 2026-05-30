@@ -210,6 +210,7 @@ struct GlobalUniformData {
     float   shadow_bias = 0.0015f;                                   // 500
     float   _pad3 = 0.f;                                             // 504
     float   _pad4 = 0.f;                                             // 508 -> 512
+    alignas(16) float ambient_ground[4]{};                           // 512  rgb = ground env tint
 };
 
 struct PushConstants {
@@ -1037,6 +1038,9 @@ struct ArchitectureViewerApp::Impl {
 
         std::array<float,3> ambient_color     = {0.10f, 0.12f, 0.16f};
         float               ambient_intensity = 1.0f;
+        // When true and a skybox is active, the ambient term is tinted by the
+        // skybox (hemispheric) instead of using the flat ambient_color above.
+        bool                env_lighting      = true;
     } lighting;
 
     // Skybox textures (shared, bound at descriptor bindings 5 & 6).
@@ -1044,6 +1048,12 @@ struct ArchitectureViewerApp::Impl {
     TextureResource sky_equirect;         // binding 6 (sampler2D, HDR decoded to LDR)
     bool sky_cubemap_loaded = false;
     bool sky_equirect_loaded = false;
+    // Representative environment colors (sky = upper hemisphere, ground = lower),
+    // averaged from the loaded cubemap / HDR pixels for skybox-driven ambient.
+    std::array<float, 3> env_cube_sky    = {0.50f, 0.60f, 0.75f};
+    std::array<float, 3> env_cube_ground = {0.20f, 0.18f, 0.16f};
+    std::array<float, 3> env_hdr_sky     = {0.50f, 0.60f, 0.75f};
+    std::array<float, 3> env_hdr_ground  = {0.20f, 0.18f, 0.16f};
 
     // Sky state (editable via UI).
     struct SkyState {
@@ -1494,6 +1504,24 @@ void createCubemapUnorm(
     texture.height = face_size;
 }
 
+// Average the RGB of a rectangular region of an RGBA byte buffer into a [0,1] triple.
+std::array<float, 3> averageRegionRgb(
+    const std::vector<std::uint8_t>& rgba, std::uint32_t img_w,
+    std::uint32_t x0, std::uint32_t y0, std::uint32_t x1, std::uint32_t y1) {
+    std::uint64_t r = 0, g = 0, b = 0, count = 0;
+    for (std::uint32_t y = y0; y < y1; ++y) {
+        for (std::uint32_t x = x0; x < x1; ++x) {
+            const std::size_t i = (static_cast<std::size_t>(y) * img_w + x) * 4U;
+            if (i + 2 >= rgba.size()) { continue; }
+            r += rgba[i]; g += rgba[i + 1]; b += rgba[i + 2]; ++count;
+        }
+    }
+    if (count == 0) { return {0.5f, 0.5f, 0.5f}; }
+    return {static_cast<float>(r) / count / 255.0f,
+            static_cast<float>(g) / count / 255.0f,
+            static_cast<float>(b) / count / 255.0f};
+}
+
 // Load a 4x3 horizontal-cross cubemap PNG into a samplerCube. Layout:
 //        [+Y]
 //   [-X][+Z][+X][-Z]
@@ -1522,6 +1550,13 @@ void loadCubemapCross(ArchitectureViewerApp::Impl& impl, const fs::path& path,
         }
     }
     createCubemapUnorm(impl, packed.data(), face, texture);
+
+    // Environment ambient: average the up-facing (+Y, cell 1,0) and down-facing
+    // (-Y, cell 1,2) faces of the cross. The shader maps viewer +Z -> cubemap +Y.
+    impl.env_cube_sky    = averageRegionRgb(cross.rgba, cross.width,
+        1U * face, 0U * face, 2U * face, 1U * face);
+    impl.env_cube_ground = averageRegionRgb(cross.rgba, cross.width,
+        1U * face, 2U * face, 2U * face, 3U * face);
 }
 
 // 1x1x6 neutral cubemap so binding 5 is always valid even when no cubemap is loaded.
@@ -1573,6 +1608,12 @@ void createSkyboxTextures(ArchitectureViewerApp::Impl& impl) {
                 destroyTexture(impl.device, impl.sky_equirect);  // free the 1x1 default
                 impl.sky_equirect = loaded;
                 impl.sky_equirect_loaded = true;
+                // Environment ambient: equirect maps dir.z=+1 (up) -> top rows,
+                // dir.z=-1 (down) -> bottom rows. Average the top/bottom quarters.
+                impl.env_hdr_sky    = averageRegionRgb(hdr.rgba, hdr.width,
+                    0U, 0U, hdr.width, hdr.height / 4U);
+                impl.env_hdr_ground = averageRegionRgb(hdr.rgba, hdr.width,
+                    0U, hdr.height * 3U / 4U, hdr.width, hdr.height);
                 std::cout << "[ArchitectureViewerApp] Skybox HDR loaded ("
                           << hdr.width << "x" << hdr.height << ").\n";
             } catch (const std::exception& ex) {
@@ -2984,10 +3025,32 @@ void updateUniformBuffer(ArchitectureViewerApp::Impl& impl, const std::size_t fr
     std::memcpy(ubo.projection, proj_arr.data(), sizeof(ubo.projection));
 
     const auto& li = impl.lighting;
-    ubo.ambient_color[0] = li.ambient_color[0];
-    ubo.ambient_color[1] = li.ambient_color[1];
-    ubo.ambient_color[2] = li.ambient_color[2];
-    ubo.ambient_color[3] = li.ambient_intensity;
+    // Ambient: when environment lighting is on and a skybox is active, derive a
+    // hemispheric sky/ground tint from the skybox; otherwise use the flat manual color.
+    std::array<float, 3> amb_sky    = li.ambient_color;
+    std::array<float, 3> amb_ground = li.ambient_color;
+    if (li.env_lighting && impl.sky.mode != 0) {
+        // Scale so a bright sky reads as fill light rather than washing out the scene.
+        constexpr float kEnvScale = 0.6f;
+        switch (impl.sky.mode) {
+            case 1: amb_sky = impl.sky.top_color; amb_ground = {0.10f, 0.09f, 0.07f}; break;  // gradient
+            case 2: amb_sky = impl.sky.top_color; amb_ground = {0.06f, 0.05f, 0.04f}; break;  // procedural
+            case 3: amb_sky = impl.env_cube_sky;  amb_ground = impl.env_cube_ground;  break;  // cubemap
+            case 4: amb_sky = impl.env_hdr_sky;   amb_ground = impl.env_hdr_ground;   break;  // HDR
+            default: break;
+        }
+        for (auto* c : {&amb_sky, &amb_ground}) {
+            (*c)[0] *= kEnvScale; (*c)[1] *= kEnvScale; (*c)[2] *= kEnvScale;
+        }
+    }
+    ubo.ambient_color[0]  = amb_sky[0];
+    ubo.ambient_color[1]  = amb_sky[1];
+    ubo.ambient_color[2]  = amb_sky[2];
+    ubo.ambient_color[3]  = li.ambient_intensity;
+    ubo.ambient_ground[0] = amb_ground[0];
+    ubo.ambient_ground[1] = amb_ground[1];
+    ubo.ambient_ground[2] = amb_ground[2];
+    ubo.ambient_ground[3] = 0.0f;
 
     const Eigen::Vector3d cam_pos = impl.camera.position();
     ubo.camera_pos[0] = static_cast<float>(cam_pos.x());
@@ -4272,7 +4335,12 @@ void renderRenderPanel(ArchitectureViewerApp::Impl& impl) {
         // --- Lighting controls -----------------------------------------------
         auto& li = impl.lighting;
         if (ImGui::CollapsingHeader("Lighting")) {
+            ImGui::Checkbox("Env. lighting (from sky)", &li.env_lighting);
+            const bool env_active = li.env_lighting && impl.sky.mode != 0;
+            // The manual ambient color is overridden while skybox env lighting is active.
+            if (env_active) { ImGui::BeginDisabled(); }
             ImGui::ColorEdit3("Ambient",       li.ambient_color.data(), ImGuiColorEditFlags_Float);
+            if (env_active) { ImGui::EndDisabled(); }
             ImGui::SliderFloat("Amb.intensity", &li.ambient_intensity, 0.0f, 2.0f);
 
             ImGui::Spacing();
