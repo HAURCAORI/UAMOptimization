@@ -7,11 +7,13 @@
 #include <mutex>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
@@ -181,16 +183,57 @@ struct FrameResources {
     VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
 };
 
+// GPU light — mirrors the GLSL GPULight struct (std140, 64 bytes, 16-byte aligned).
+struct alignas(16) GPULightData {
+    float position[4]   = {0.f, 0.f, 0.f, 0.f};   // xyz=pos or dir, w=type
+    float color[4]      = {1.f, 1.f, 1.f, 1.f};   // rgb=color, a=intensity
+    float direction[4]  = {0.f,-1.f, 0.f,10.f};   // xyz=dir, w=range
+    float spotAngles[4] = {0.f, 0.f, 0.f, 0.f};   // x=cos(inner), y=cos(outer)
+};
+
+constexpr int kMaxLights = 4;
+
 struct GlobalUniformData {
-    alignas(16) float view[16]{};
-    alignas(16) float projection[16]{};
-    alignas(16) float light_direction[4]{-0.35f, -0.80f, -0.45f, 0.0f};
+    alignas(16) float view[16]{};                                    //   0
+    alignas(16) float projection[16]{};                              //  64
+    alignas(16) float ambient_color[4]{0.10f, 0.12f, 0.16f, 1.0f};   // 128  rgb=ambient, a=intensity
+    alignas(16) float camera_pos[4]{};                               // 144  xyz=world, w=unused
+    GPULightData lights[kMaxLights];                                 // 160  (4*64) -> 416
+    alignas(16) int32_t light_count = 0;                             // 416
+    // Individual scalar pads (NOT float[3]): std140 pads each array element to
+    // 16 bytes, so a scalar array here would misalign light_space_matrix.
+    float _pad0 = 0.f;                                               // 420
+    float _pad1 = 0.f;                                               // 424
+    float _pad2 = 0.f;                                               // 428
+    alignas(16) float light_space_matrix[16]{};                      // 432  directional light VP
+    alignas(16) int32_t shadow_enabled = 0;                          // 496  0=off, 1=on
+    float   shadow_bias = 0.0015f;                                   // 500
+    float   _pad3 = 0.f;                                             // 504
+    float   _pad4 = 0.f;                                             // 508 -> 512
 };
 
 struct PushConstants {
     alignas(16) float model[16]{};
     alignas(16) float color[4]{};
+    float   roughness    = 0.7f;
+    float   metallic     = 0.0f;
+    int32_t use_pbr      = 0;    // 0 = Blinn-Phong,  1 = Cook-Torrance PBR
+    int32_t has_normal_map = 0;  // 0 = no,            1 = perturb via normalTex
 };
+
+struct SkyPushConstants {
+    float   sky_color[4] = {0.38f, 0.62f, 1.0f, 1.0f};
+    int32_t sky_mode     = 0;    // 0 = gradient,  1 = procedural sky
+    int32_t _pad[3]      = {};
+};
+
+// Shadow depth pass push constants (128 bytes — Vulkan guaranteed minimum).
+struct ShadowPushConstants {
+    float light_space_vp[16]{};  // pre-multiplied light view-projection
+    float model[16]{};           // per-draw model matrix
+};
+
+constexpr std::uint32_t kShadowMapSize = 2048;
 
 std::array<float, 16> toFloatArray(const Eigen::Matrix4f& matrix) {
     std::array<float, 16> values{};
@@ -350,6 +393,20 @@ void appendSpatialReferences(std::vector<PrimitiveInstance>& instances) {
             "ref_grid_y_" + std::to_string(index),
             "ReferenceGrid"));
     }
+
+    // Solid ground plane, placed just beneath the reference grid. Large enough to
+    // fill the frame for exported images. Its color/visibility are applied live from
+    // impl in applyVisibilityFlags; a neutral default is baked here.
+    const double plane_half           = std::max(radius * 10.0, 40.0);
+    const double plane_half_thickness = std::max(0.01 * radius, 0.02);
+    // Top face sits a clear gap below the grid lines to avoid z-fighting.
+    const double plane_z              = grid_z - 2.0 * grid_thickness - plane_half_thickness;
+    instances.push_back(makeReferenceBox(
+        Eigen::Vector3d(0.0, 0.0, plane_z),
+        Eigen::Vector3d(plane_half, plane_half, plane_half_thickness),
+        {0.55f, 0.57f, 0.60f, 1.0f},
+        "ref_ground",
+        "GroundPlane"));
 }
 
 Eigen::Vector3d cameraForward(const ViewerCamera& camera) {
@@ -939,13 +996,76 @@ struct ArchitectureViewerApp::Impl {
     VkPipeline wireframe_pipeline = VK_NULL_HANDLE;
     VkPipeline alpha_pipeline = VK_NULL_HANDLE;
 
+    // Skybox pipeline (optional — enabled when skybox.vert/frag spv are found).
+    VkPipelineLayout skybox_pipeline_layout = VK_NULL_HANDLE;
+    VkPipeline skybox_pipeline = VK_NULL_HANDLE;
+    bool skybox_enabled = false;
+
     std::vector<MeshResource> mannequin_meshes;
     bool mannequin_loaded = false;
-    TextureResource default_texture;
+    // Default material textures (1×1 fallbacks bound to bindings 1-3 for primitives).
+    TextureResource default_texture;         // binding 1: white albedo
+    TextureResource default_mr_texture;      // binding 2: roughness=1, metallic=0
+    TextureResource default_normal_texture;  // binding 3: flat tangent-space normal
+    // Mannequin material textures.
     TextureResource mannequin_plastic_texture;
+    TextureResource mannequin_plastic_mr_texture;
+    TextureResource mannequin_plastic_normal_texture;
     TextureResource mannequin_metal_texture;
+    TextureResource mannequin_metal_mr_texture;
+    TextureResource mannequin_metal_normal_texture;
+    // Per-frame combined descriptor sets for each mannequin material.
+    std::array<VkDescriptorSet, kFramesInFlight> mannequin_plastic_mat_sets{};
+    std::array<VkDescriptorSet, kFramesInFlight> mannequin_metal_mat_sets{};
     // Human reference figure placed 9 m in +Y, feet at Z = 0 (hub height).
     Eigen::Vector3d mannequin_world_pos{0.0, 9.0, 0.0};
+
+    // Lighting state (editable via UI).
+    struct LightState {
+        std::array<float,3> dir_color     = {1.00f, 0.95f, 0.88f};
+        float               dir_intensity = 1.2f;
+        std::array<float,3> dir_dir       = {-0.35f,-0.80f,-0.45f};
+
+        bool                spot_on         = false;
+        std::array<float,3> spot_pos        = { 0.0f,  0.0f, 12.0f};
+        std::array<float,3> spot_dir        = { 0.0f,  0.0f, -1.0f};
+        std::array<float,3> spot_color      = { 0.70f, 0.85f, 1.00f};
+        float               spot_intensity  = 2.5f;
+        float               spot_range      = 20.0f;
+        float               spot_inner_deg  = 18.0f;
+        float               spot_outer_deg  = 32.0f;
+
+        std::array<float,3> ambient_color     = {0.10f, 0.12f, 0.16f};
+        float               ambient_intensity = 1.0f;
+    } lighting;
+
+    // Skybox textures (shared, bound at descriptor bindings 5 & 6).
+    TextureResource sky_cubemap;          // binding 5 (samplerCube)
+    TextureResource sky_equirect;         // binding 6 (sampler2D, HDR decoded to LDR)
+    bool sky_cubemap_loaded = false;
+    bool sky_equirect_loaded = false;
+
+    // Sky state (editable via UI).
+    struct SkyState {
+        int                 mode      = 1;  // 0=Off, 1=Gradient, 2=Procedural, 3=Cubemap, 4=HDR
+        std::array<float,3> top_color = {0.38f, 0.62f, 1.0f};
+    } sky;
+
+    // Directional shadow map (optional — created once, swapchain-independent).
+    bool             shadow_supported = false;
+    bool             ui_shadow_enabled = false;
+    float            ui_shadow_bias = 0.0015f;
+    double           shadow_scene_radius = 8.0;  // ortho frustum half-extent
+    VkImage          shadow_image = VK_NULL_HANDLE;
+    VkDeviceMemory   shadow_memory = VK_NULL_HANDLE;
+    VkImageView      shadow_view = VK_NULL_HANDLE;
+    VkSampler        shadow_sampler = VK_NULL_HANDLE;
+    VkRenderPass     shadow_render_pass = VK_NULL_HANDLE;
+    VkFramebuffer    shadow_framebuffer = VK_NULL_HANDLE;
+    VkPipelineLayout shadow_pipeline_layout = VK_NULL_HANDLE;
+    VkPipeline       shadow_pipeline = VK_NULL_HANDLE;
+    Eigen::Matrix4f  cached_light_vp = Eigen::Matrix4f::Identity();
+
     VkSampleCountFlagBits msaa_samples = VK_SAMPLE_COUNT_4_BIT;
     VkImage msaa_color_image = VK_NULL_HANDLE;
     VkDeviceMemory msaa_color_memory = VK_NULL_HANDLE;
@@ -961,8 +1081,14 @@ struct ArchitectureViewerApp::Impl {
     bool ui_show_grid = true;
     bool ui_show_labels = true;
     bool ui_wireframe = false;
+    bool ui_show_ground = true;
+    std::array<float, 3> ground_color = {0.55f, 0.57f, 0.60f};
     std::unordered_map<std::string, bool> element_visibility;
     bool sampler_anisotropy_supported = false;
+
+    // GUI overlay visibility (toggled by the 'H' key or the Hide-GUI button).
+    bool ui_show_gui = true;
+    bool h_key_was_down = false;
 
 #ifdef HEXAARCH_HAS_IMGUI
     VkDescriptorPool imgui_pool = VK_NULL_HANDLE;
@@ -1020,6 +1146,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
 
 void initializeImGui(ArchitectureViewerApp::Impl& impl);
 void cleanupImGui(ArchitectureViewerApp::Impl& impl);
+fs::path resolveAssetRoot();  // defined later, near loadMannequin
 
 VkSampleCountFlagBits pickMsaaSamples(const VkPhysicalDevice device) {
     VkPhysicalDeviceProperties props{};
@@ -1059,7 +1186,8 @@ void createTextureFromPixels(
     const std::uint8_t* pixels,
     const std::uint32_t width,
     const std::uint32_t height,
-    TextureResource& texture) {
+    TextureResource& texture,
+    const VkFormat format = VK_FORMAT_R8G8B8A8_SRGB) {
     const VkDeviceSize image_size = static_cast<VkDeviceSize>(width) * height * 4U;
     BufferResource staging;
     createBuffer(
@@ -1080,7 +1208,7 @@ void createTextureFromPixels(
         impl.device,
         width,
         height,
-        VK_FORMAT_R8G8B8A8_SRGB,
+        format,
         VK_IMAGE_TILING_OPTIMAL,
         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -1114,7 +1242,7 @@ void createTextureFromPixels(
     view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     view_info.image = texture.image;
     view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    view_info.format = VK_FORMAT_R8G8B8A8_SRGB;
+    view_info.format = format;
     view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     view_info.subresourceRange.levelCount = 1;
     view_info.subresourceRange.layerCount = 1;
@@ -1151,58 +1279,417 @@ void createTextureFromFile(
     createTextureFromPixels(impl, pixels.rgba.data(), pixels.width, pixels.height, texture);
 }
 
+// ---- Radiance .hdr (RGBE) decoder -> tone-mapped LDR sRGB pixels -------------
+// Supports the common new-RLE format plus a flat (non-RLE) fallback. Returns false
+// on any parse problem (caller then disables the HDR sky mode). The result is
+// tone-mapped to 8-bit sRGB because the skybox only displays it as a background.
+bool decodeRadianceHdr(const fs::path& path, ImagePixels& out) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) { return false; }
+    std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(file)),
+                                     std::istreambuf_iterator<char>());
+    std::size_t p = 0;
+    const std::size_t n = bytes.size();
+    auto readLine = [&](std::string& line) -> bool {
+        line.clear();
+        while (p < n && bytes[p] != '\n') { line.push_back(static_cast<char>(bytes[p++])); }
+        if (p < n) { ++p; }  // consume newline
+        return true;
+    };
+
+    std::string line;
+    if (!readLine(line)) { return false; }
+    if (line.rfind("#?", 0) != 0) { return false; }  // magic "#?RADIANCE" / "#?RGBE"
+    // Skip header until a blank line.
+    bool ok_format = false;
+    while (p < n) {
+        if (!readLine(line)) { return false; }
+        if (line.empty()) { break; }
+        if (line.find("32-bit_rle_rgbe") != std::string::npos
+         || line.find("32-bit_rle_xyze") != std::string::npos) { ok_format = true; }
+    }
+    (void)ok_format;
+
+    // Resolution line, e.g. "-Y 720 +X 1280".
+    if (!readLine(line)) { return false; }
+    int height = 0, width = 0;
+    {
+        // Parse "<sign><axis> <num> <sign><axis> <num>", e.g. "-Y 720 +X 1280".
+        char s1[4] = {0}, s2[4] = {0};
+        if (std::sscanf(line.c_str(), "%3s %d %3s %d", s1, &height, s2, &width) != 4) {
+            return false;
+        }
+    }
+    if (width <= 0 || height <= 0 || width > 32767) { return false; }
+
+    std::vector<std::uint8_t> rgbe(static_cast<std::size_t>(width) * height * 4U);
+
+    auto rgbeToFloat = [](std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t e,
+                          float& fr, float& fg, float& fb) {
+        if (e == 0) { fr = fg = fb = 0.0f; return; }
+        const float f = std::ldexp(1.0f, static_cast<int>(e) - (128 + 8));
+        fr = (r + 0.5f) * f; fg = (g + 0.5f) * f; fb = (b + 0.5f) * f;
+    };
+
+    std::vector<std::uint8_t> scan(static_cast<std::size_t>(width) * 4U);
+    for (int y = 0; y < height; ++y) {
+        if (p + 4 > n) { return false; }
+        const std::uint8_t b0 = bytes[p], b1 = bytes[p + 1], b2 = bytes[p + 2], b3 = bytes[p + 3];
+        const bool new_rle = (b0 == 2 && b1 == 2 && ((b2 << 8) | b3) == width);
+        if (new_rle) {
+            p += 4;
+            for (int c = 0; c < 4; ++c) {
+                int x = 0;
+                while (x < width) {
+                    if (p >= n) { return false; }
+                    int count = bytes[p++];
+                    if (count > 128) {           // run of (count-128) identical bytes
+                        count -= 128;
+                        if (p >= n || x + count > width) { return false; }
+                        const std::uint8_t val = bytes[p++];
+                        for (int k = 0; k < count; ++k) { scan[(x++) * 4 + c] = val; }
+                    } else {                     // literal run of `count` bytes
+                        if (p + count > n || x + count > width) { return false; }
+                        for (int k = 0; k < count; ++k) { scan[(x++) * 4 + c] = bytes[p++]; }
+                    }
+                }
+            }
+            std::memcpy(&rgbe[static_cast<std::size_t>(y) * width * 4U], scan.data(), scan.size());
+        } else {
+            // Flat scanline: width consecutive RGBE quadruples.
+            if (p + static_cast<std::size_t>(width) * 4U > n) { return false; }
+            std::memcpy(&rgbe[static_cast<std::size_t>(y) * width * 4U],
+                        &bytes[p], static_cast<std::size_t>(width) * 4U);
+            p += static_cast<std::size_t>(width) * 4U;
+        }
+    }
+
+    // Tone-map RGBE -> sRGB LDR (exposure + Reinhard + gamma).
+    out.width  = static_cast<std::uint32_t>(width);
+    out.height = static_cast<std::uint32_t>(height);
+    out.rgba.resize(static_cast<std::size_t>(width) * height * 4U);
+    constexpr float kExposure = 1.6f;
+    for (std::size_t i = 0; i < static_cast<std::size_t>(width) * height; ++i) {
+        float fr, fg, fb;
+        rgbeToFloat(rgbe[i * 4 + 0], rgbe[i * 4 + 1], rgbe[i * 4 + 2], rgbe[i * 4 + 3], fr, fg, fb);
+        fr *= kExposure; fg *= kExposure; fb *= kExposure;
+        fr = fr / (fr + 1.0f); fg = fg / (fg + 1.0f); fb = fb / (fb + 1.0f);  // Reinhard
+        const float gr = std::pow(fr, 1.0f / 2.2f);
+        const float gg = std::pow(fg, 1.0f / 2.2f);
+        const float gb = std::pow(fb, 1.0f / 2.2f);
+        out.rgba[i * 4 + 0] = static_cast<std::uint8_t>(std::clamp(gr, 0.0f, 1.0f) * 255.0f + 0.5f);
+        out.rgba[i * 4 + 1] = static_cast<std::uint8_t>(std::clamp(gg, 0.0f, 1.0f) * 255.0f + 0.5f);
+        out.rgba[i * 4 + 2] = static_cast<std::uint8_t>(std::clamp(gb, 0.0f, 1.0f) * 255.0f + 0.5f);
+        out.rgba[i * 4 + 3] = 255;
+    }
+    return true;
+}
+
+// ---- Cubemap creation from 6 packed faces (UNORM, displayed directly) --------
+// faces_packed: 6 * faceSize*faceSize*4 bytes, layer order +X,-X,+Y,-Y,+Z,-Z.
+void createCubemapUnorm(
+    ArchitectureViewerApp::Impl& impl,
+    const std::uint8_t* faces_packed,
+    const std::uint32_t face_size,
+    TextureResource& texture) {
+    const VkDeviceSize layer_bytes = static_cast<VkDeviceSize>(face_size) * face_size * 4U;
+    const VkDeviceSize total_bytes = layer_bytes * 6U;
+
+    BufferResource staging;
+    createBuffer(impl.physical_device, impl.device, total_bytes,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, staging);
+    void* mapped = nullptr;
+    vkMapMemory(impl.device, staging.memory, 0, total_bytes, 0, &mapped);
+    std::memcpy(mapped, faces_packed, static_cast<std::size_t>(total_bytes));
+    vkUnmapMemory(impl.device, staging.memory);
+
+    VkImageCreateInfo image_info{};
+    image_info.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image_info.flags         = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    image_info.imageType     = VK_IMAGE_TYPE_2D;
+    image_info.extent        = {face_size, face_size, 1};
+    image_info.mipLevels     = 1;
+    image_info.arrayLayers   = 6;
+    image_info.format        = VK_FORMAT_R8G8B8A8_UNORM;
+    image_info.tiling        = VK_IMAGE_TILING_OPTIMAL;
+    image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    image_info.usage         = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    image_info.samples       = VK_SAMPLE_COUNT_1_BIT;
+    image_info.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateImage(impl.device, &image_info, nullptr, &texture.image) != VK_SUCCESS) {
+        destroyBuffer(impl.device, staging);
+        throw std::runtime_error("Failed to create cubemap image.");
+    }
+    VkMemoryRequirements mem_reqs{};
+    vkGetImageMemoryRequirements(impl.device, texture.image, &mem_reqs);
+    VkMemoryAllocateInfo alloc{};
+    alloc.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize  = mem_reqs.size;
+    alloc.memoryTypeIndex = findMemoryType(impl.physical_device, mem_reqs.memoryTypeBits,
+                                           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (vkAllocateMemory(impl.device, &alloc, nullptr, &texture.memory) != VK_SUCCESS) {
+        destroyBuffer(impl.device, staging);
+        throw std::runtime_error("Failed to allocate cubemap memory.");
+    }
+    vkBindImageMemory(impl.device, texture.image, texture.memory, 0);
+
+    const VkCommandBuffer cmd = beginSingleTimeCommands(impl.device, impl.transfer_pool);
+    VkImageMemoryBarrier to_dst{};
+    to_dst.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    to_dst.oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED;
+    to_dst.newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    to_dst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to_dst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to_dst.image            = texture.image;
+    to_dst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6};
+    to_dst.dstAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &to_dst);
+
+    std::array<VkBufferImageCopy, 6> regions{};
+    for (std::uint32_t layer = 0; layer < 6; ++layer) {
+        regions[layer].bufferOffset      = layer * layer_bytes;
+        regions[layer].imageSubresource  = {VK_IMAGE_ASPECT_COLOR_BIT, 0, layer, 1};
+        regions[layer].imageExtent       = {face_size, face_size, 1};
+    }
+    vkCmdCopyBufferToImage(cmd, staging.buffer, texture.image,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 6, regions.data());
+
+    VkImageMemoryBarrier to_read = to_dst;
+    to_read.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    to_read.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    to_read.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    to_read.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &to_read);
+    endSingleTimeCommands(impl.device, impl.graphics_queue, impl.transfer_pool, cmd);
+    destroyBuffer(impl.device, staging);
+
+    VkImageViewCreateInfo view_info{};
+    view_info.sType                       = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view_info.image                       = texture.image;
+    view_info.viewType                    = VK_IMAGE_VIEW_TYPE_CUBE;
+    view_info.format                      = VK_FORMAT_R8G8B8A8_UNORM;
+    view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    view_info.subresourceRange.levelCount = 1;
+    view_info.subresourceRange.layerCount = 6;
+    if (vkCreateImageView(impl.device, &view_info, nullptr, &texture.view) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create cubemap image view.");
+    }
+
+    VkSamplerCreateInfo sampler_info{};
+    sampler_info.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sampler_info.magFilter    = VK_FILTER_LINEAR;
+    sampler_info.minFilter    = VK_FILTER_LINEAR;
+    sampler_info.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.maxLod       = 0.0f;
+    if (vkCreateSampler(impl.device, &sampler_info, nullptr, &texture.sampler) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create cubemap sampler.");
+    }
+    texture.width  = face_size;
+    texture.height = face_size;
+}
+
+// Load a 4x3 horizontal-cross cubemap PNG into a samplerCube. Layout:
+//        [+Y]
+//   [-X][+Z][+X][-Z]
+//        [-Y]
+void loadCubemapCross(ArchitectureViewerApp::Impl& impl, const fs::path& path,
+                      TextureResource& texture) {
+    const ImagePixels cross = loadImagePixels(path);
+    const std::uint32_t face = cross.width / 4U;
+    if (face == 0U || cross.width % 4U != 0U || cross.height != face * 3U) {
+        throw std::runtime_error("Cubemap cross must be a 4x3 grid (got "
+            + std::to_string(cross.width) + "x" + std::to_string(cross.height) + ").");
+    }
+    // (col,row) of each face in the cross, in Vulkan layer order +X,-X,+Y,-Y,+Z,-Z.
+    const std::array<std::pair<std::uint32_t, std::uint32_t>, 6> cells{{
+        {2, 1}, {0, 1}, {1, 0}, {1, 2}, {1, 1}, {3, 1}}};
+
+    const std::size_t face_bytes = static_cast<std::size_t>(face) * face * 4U;
+    std::vector<std::uint8_t> packed(face_bytes * 6U);
+    for (std::uint32_t f = 0; f < 6; ++f) {
+        const std::uint32_t ox = cells[f].first  * face;
+        const std::uint32_t oy = cells[f].second * face;
+        for (std::uint32_t y = 0; y < face; ++y) {
+            const std::uint8_t* src = &cross.rgba[(static_cast<std::size_t>(oy + y) * cross.width + ox) * 4U];
+            std::uint8_t* dst = &packed[f * face_bytes + static_cast<std::size_t>(y) * face * 4U];
+            std::memcpy(dst, src, static_cast<std::size_t>(face) * 4U);
+        }
+    }
+    createCubemapUnorm(impl, packed.data(), face, texture);
+}
+
+// 1x1x6 neutral cubemap so binding 5 is always valid even when no cubemap is loaded.
+void createDefaultCubemap(ArchitectureViewerApp::Impl& impl, TextureResource& texture) {
+    std::array<std::uint8_t, 6 * 4> faces{};
+    for (std::size_t i = 0; i < 6; ++i) {
+        faces[i * 4 + 0] = 90; faces[i * 4 + 1] = 110; faces[i * 4 + 2] = 140; faces[i * 4 + 3] = 255;
+    }
+    createCubemapUnorm(impl, faces.data(), 1, texture);
+}
+
+// Create default sky textures (so bindings 5/6 are always valid), then try to load
+// the real cubemap_sample.png and sample.hdr from asset/skybox/. Missing/failed
+// loads leave the defaults in place and the corresponding UI mode stays disabled.
+void createSkyboxTextures(ArchitectureViewerApp::Impl& impl) {
+    createDefaultCubemap(impl, impl.sky_cubemap);
+    constexpr std::array<std::uint8_t, 4> grey{90, 110, 140, 255};
+    createTextureFromPixels(impl, grey.data(), 1, 1, impl.sky_equirect, VK_FORMAT_R8G8B8A8_UNORM);
+
+    const fs::path asset_root = resolveAssetRoot();
+    if (asset_root.empty()) {
+        std::cerr << "[ArchitectureViewerApp] Skybox asset dir not found; cubemap/HDR sky disabled.\n";
+        return;
+    }
+    const fs::path sky_dir = asset_root / "skybox";
+
+    const fs::path cube_path = sky_dir / "cubemap_sample.png";
+    if (fs::exists(cube_path)) {
+        try {
+            TextureResource loaded;
+            loadCubemapCross(impl, cube_path, loaded);
+            destroyTexture(impl.device, impl.sky_cubemap);  // free the 1x1 default
+            impl.sky_cubemap = loaded;
+            impl.sky_cubemap_loaded = true;
+            std::cout << "[ArchitectureViewerApp] Skybox cubemap loaded.\n";
+        } catch (const std::exception& ex) {
+            std::cerr << "[ArchitectureViewerApp] Cubemap load failed: " << ex.what() << "\n";
+        }
+    }
+
+    const fs::path hdr_path = sky_dir / "sample.hdr";
+    if (fs::exists(hdr_path)) {
+        ImagePixels hdr;
+        if (decodeRadianceHdr(hdr_path, hdr)) {
+            try {
+                TextureResource loaded;
+                createTextureFromPixels(impl, hdr.rgba.data(), hdr.width, hdr.height,
+                                        loaded, VK_FORMAT_R8G8B8A8_UNORM);
+                destroyTexture(impl.device, impl.sky_equirect);  // free the 1x1 default
+                impl.sky_equirect = loaded;
+                impl.sky_equirect_loaded = true;
+                std::cout << "[ArchitectureViewerApp] Skybox HDR loaded ("
+                          << hdr.width << "x" << hdr.height << ").\n";
+            } catch (const std::exception& ex) {
+                std::cerr << "[ArchitectureViewerApp] HDR upload failed: " << ex.what() << "\n";
+            }
+        } else {
+            std::cerr << "[ArchitectureViewerApp] HDR decode failed: " << hdr_path.string() << "\n";
+        }
+    }
+}
+
+// Write a 5-binding descriptor set:
+// binding0=UBO, binding1=albedo, binding2=MR, binding3=normal, binding4=shadow map.
+void writeDescriptorSet4(
+    ArchitectureViewerApp::Impl& impl,
+    const std::size_t frame_index,
+    const VkDescriptorSet dst_set,
+    const TextureResource& albedo,
+    const TextureResource& mr,
+    const TextureResource& nrm) {
+    VkDescriptorBufferInfo buf_info{};
+    buf_info.buffer = impl.frames[frame_index].uniform_buffer.buffer;
+    buf_info.offset = 0;
+    buf_info.range  = sizeof(GlobalUniformData);
+
+    auto makeImgInfo = [](const TextureResource& t) {
+        VkDescriptorImageInfo i{};
+        i.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        i.imageView   = t.view;
+        i.sampler     = t.sampler;
+        return i;
+    };
+    VkDescriptorImageInfo albedo_info = makeImgInfo(albedo);
+    VkDescriptorImageInfo mr_info     = makeImgInfo(mr);
+    VkDescriptorImageInfo nrm_info    = makeImgInfo(nrm);
+
+    // Shadow map: depth image sampled with a comparison sampler.
+    VkDescriptorImageInfo shadow_info{};
+    shadow_info.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    shadow_info.imageView   = impl.shadow_view;
+    shadow_info.sampler     = impl.shadow_sampler;
+
+    // Shared skybox textures (cubemap + equirect).
+    VkDescriptorImageInfo cube_info = makeImgInfo(impl.sky_cubemap);
+    VkDescriptorImageInfo eqr_info  = makeImgInfo(impl.sky_equirect);
+
+    std::array<VkWriteDescriptorSet, 7> writes{};
+    writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet          = dst_set;
+    writes[0].dstBinding      = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[0].pBufferInfo     = &buf_info;
+    for (std::uint32_t b = 1; b <= 6; ++b) {
+        writes[b].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[b].dstSet          = dst_set;
+        writes[b].dstBinding      = b;
+        writes[b].descriptorCount = 1;
+        writes[b].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    }
+    writes[1].pImageInfo = &albedo_info;
+    writes[2].pImageInfo = &mr_info;
+    writes[3].pImageInfo = &nrm_info;
+    writes[4].pImageInfo = &shadow_info;
+    writes[5].pImageInfo = &cube_info;
+    writes[6].pImageInfo = &eqr_info;
+    vkUpdateDescriptorSets(impl.device, static_cast<std::uint32_t>(writes.size()),
+                           writes.data(), 0, nullptr);
+}
+
+// Allocate kFramesInFlight descriptor sets for a PBR material and write all 4 bindings.
+void allocatePbrMaterialSets(
+    ArchitectureViewerApp::Impl& impl,
+    const TextureResource& albedo,
+    const TextureResource& mr,
+    const TextureResource& nrm,
+    std::array<VkDescriptorSet, kFramesInFlight>& out_sets) {
+    std::array<VkDescriptorSetLayout, kFramesInFlight> layouts{};
+    layouts.fill(impl.descriptor_set_layout);
+    VkDescriptorSetAllocateInfo alloc{};
+    alloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc.descriptorPool     = impl.descriptor_pool;
+    alloc.descriptorSetCount = static_cast<std::uint32_t>(layouts.size());
+    alloc.pSetLayouts        = layouts.data();
+    if (vkAllocateDescriptorSets(impl.device, &alloc, out_sets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate PBR material descriptor sets.");
+    }
+    for (std::size_t i = 0; i < kFramesInFlight; ++i) {
+        writeDescriptorSet4(impl, i, out_sets[i], albedo, mr, nrm);
+    }
+}
+
 void createDefaultTexture(ArchitectureViewerApp::Impl& impl) {
     constexpr std::array<std::uint8_t, 4> white{255, 255, 255, 255};
     createTextureFromPixels(impl, white.data(), 1, 1, impl.default_texture);
 }
 
+void createDefaultMrTexture(ArchitectureViewerApp::Impl& impl) {
+    // glTF ORM convention: r=occlusion, g=roughness, b=metallic.
+    // Default: fully rough non-metallic dielectric (occlusion=1, roughness=1, metallic=0).
+    constexpr std::array<std::uint8_t, 4> orm{255, 255, 0, 255};
+    createTextureFromPixels(impl, orm.data(), 1, 1, impl.default_mr_texture);
+}
+
+void createDefaultNormalTexture(ArchitectureViewerApp::Impl& impl) {
+    // Flat tangent-space normal: (0,0,1) packed as (128,128,255).
+    constexpr std::array<std::uint8_t, 4> flat{128, 128, 255, 255};
+    createTextureFromPixels(impl, flat.data(), 1, 1, impl.default_normal_texture);
+}
+
+// Allocate per-frame descriptor sets for a single-texture (albedo-only) mesh,
+// binding the default MR and normal textures to slots 2 and 3.
 void allocateTextureDescriptorSets(ArchitectureViewerApp::Impl& impl, TextureResource& texture) {
-    std::array<VkDescriptorSetLayout, kFramesInFlight> layouts{};
-    layouts.fill(impl.descriptor_set_layout);
-
-    VkDescriptorSetAllocateInfo alloc_info{};
-    alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    alloc_info.descriptorPool = impl.descriptor_pool;
-    alloc_info.descriptorSetCount = static_cast<std::uint32_t>(layouts.size());
-    alloc_info.pSetLayouts = layouts.data();
-
-    if (vkAllocateDescriptorSets(impl.device, &alloc_info, texture.descriptor_sets.data()) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to allocate texture descriptor sets.");
-    }
-
-    for (std::size_t index = 0; index < kFramesInFlight; ++index) {
-        VkDescriptorBufferInfo buffer_info{};
-        buffer_info.buffer = impl.frames[index].uniform_buffer.buffer;
-        buffer_info.offset = 0;
-        buffer_info.range = sizeof(GlobalUniformData);
-
-        VkDescriptorImageInfo image_info{};
-        image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        image_info.imageView = texture.view;
-        image_info.sampler = texture.sampler;
-
-        std::array<VkWriteDescriptorSet, 2> writes{};
-        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[0].dstSet = texture.descriptor_sets[index];
-        writes[0].dstBinding = 0;
-        writes[0].descriptorCount = 1;
-        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        writes[0].pBufferInfo = &buffer_info;
-
-        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[1].dstSet = texture.descriptor_sets[index];
-        writes[1].dstBinding = 1;
-        writes[1].descriptorCount = 1;
-        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[1].pImageInfo = &image_info;
-
-        vkUpdateDescriptorSets(
-            impl.device,
-            static_cast<std::uint32_t>(writes.size()),
-            writes.data(),
-            0,
-            nullptr);
-    }
+    allocatePbrMaterialSets(impl, texture,
+                            impl.default_mr_texture,
+                            impl.default_normal_texture,
+                            texture.descriptor_sets);
 }
 
 void destroySwapchainResources(ArchitectureViewerApp::Impl& impl) {
@@ -1237,6 +1724,14 @@ void destroySwapchainResources(ArchitectureViewerApp::Impl& impl) {
         impl.depth_memory = VK_NULL_HANDLE;
     }
 
+    if (impl.skybox_pipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(impl.device, impl.skybox_pipeline, nullptr);
+        impl.skybox_pipeline = VK_NULL_HANDLE;
+    }
+    if (impl.skybox_pipeline_layout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(impl.device, impl.skybox_pipeline_layout, nullptr);
+        impl.skybox_pipeline_layout = VK_NULL_HANDLE;
+    }
     if (impl.alpha_pipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(impl.device, impl.alpha_pipeline, nullptr);
         impl.alpha_pipeline = VK_NULL_HANDLE;
@@ -1476,21 +1971,30 @@ void createRenderPass(ArchitectureViewerApp::Impl& impl) {
 }
 
 void createDescriptorSetLayout(ArchitectureViewerApp::Impl& impl) {
-    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
-    bindings[0].binding = 0;
-    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    // binding 0: GlobalUniforms UBO    (vertex + fragment)
+    // binding 1: albedo sampler2D      (fragment)
+    // binding 2: metallic-roughness    (fragment)
+    // binding 3: normal map            (fragment)
+    // binding 4: shadow sampler2DShadow(fragment)
+    // binding 5: skybox samplerCube    (fragment)
+    // binding 6: skybox equirect 2D    (fragment)
+    std::array<VkDescriptorSetLayoutBinding, 7> bindings{};
+    bindings[0].binding         = 0;
+    bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
-    bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[0].stageFlags      = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    bindings[1].binding = 1;
-    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[1].descriptorCount = 1;
-    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    for (std::uint32_t i = 1; i <= 6; ++i) {
+        bindings[i].binding         = i;
+        bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
 
     VkDescriptorSetLayoutCreateInfo create_info{};
-    create_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    create_info.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     create_info.bindingCount = static_cast<std::uint32_t>(bindings.size());
-    create_info.pBindings = bindings.data();
+    create_info.pBindings    = bindings.data();
 
     if (vkCreateDescriptorSetLayout(impl.device, &create_info, nullptr, &impl.descriptor_set_layout) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create descriptor set layout.");
@@ -1660,6 +2164,402 @@ void createGraphicsPipeline(ArchitectureViewerApp::Impl& impl) {
     vkDestroyShaderModule(impl.device, vert_module, nullptr);
 }
 
+void createSkyboxPipeline(ArchitectureViewerApp::Impl& impl) {
+    fs::path vert_path = impl.compiledShaderPath("skybox.vert");
+    fs::path frag_path = impl.compiledShaderPath("skybox.frag");
+    if (!fs::exists(vert_path) || !fs::exists(frag_path)) {
+        std::cerr << "[ArchitectureViewerApp] Skybox shaders not found; skybox disabled.\n";
+        impl.skybox_enabled = false;
+        return;
+    }
+    const auto vert_code = readBinaryFile(vert_path);
+    const auto frag_code = readBinaryFile(frag_path);
+    VkShaderModule vert_mod = createShaderModule(impl.device, vert_code);
+    VkShaderModule frag_mod = createShaderModule(impl.device, frag_code);
+
+    std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
+    stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vert_mod;
+    stages[0].pName  = "main";
+    stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = frag_mod;
+    stages[1].pName  = "main";
+
+    // No vertex buffer inputs — hardcoded cube vertices accessed via gl_VertexIndex.
+    VkPipelineVertexInputStateCreateInfo vertex_input{};
+    vertex_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+    VkPipelineInputAssemblyStateCreateInfo input_assembly{};
+    input_assembly.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkViewport viewport{};
+    viewport.width    = static_cast<float>(impl.swapchain_extent.width);
+    viewport.height   = static_cast<float>(impl.swapchain_extent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    VkRect2D scissor{};
+    scissor.extent = impl.swapchain_extent;
+
+    VkPipelineViewportStateCreateInfo viewport_state{};
+    viewport_state.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewport_state.viewportCount = 1;
+    viewport_state.pViewports    = &viewport;
+    viewport_state.scissorCount  = 1;
+    viewport_state.pScissors     = &scissor;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType     = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.lineWidth   = 1.0f;
+    rasterizer.cullMode    = VK_CULL_MODE_NONE;  // camera inside cube, render all faces
+    rasterizer.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType               = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = impl.msaa_samples;
+
+    // Depth: LESS_OR_EQUAL so z/w=1.0 (far plane) passes against cleared 1.0; write enabled
+    // so geometry drawn afterward (with LESS) overwrites it.
+    VkPipelineDepthStencilStateCreateInfo depth_stencil{};
+    depth_stencil.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depth_stencil.depthTestEnable  = VK_TRUE;
+    depth_stencil.depthWriteEnable = VK_TRUE;
+    depth_stencil.depthCompareOp   = VK_COMPARE_OP_LESS_OR_EQUAL;
+
+    VkPipelineColorBlendAttachmentState blend{};
+    blend.colorWriteMask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo color_blending{};
+    color_blending.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    color_blending.attachmentCount = 1;
+    color_blending.pAttachments    = &blend;
+
+    // Skybox uses its own smaller push constant range (SkyPushConstants = 32 bytes).
+    VkPushConstantRange sky_pc{};
+    sky_pc.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    sky_pc.offset     = 0;
+    sky_pc.size       = sizeof(SkyPushConstants);
+
+    VkPipelineLayoutCreateInfo layout_info{};
+    layout_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layout_info.setLayoutCount         = 1;
+    layout_info.pSetLayouts            = &impl.descriptor_set_layout;
+    layout_info.pushConstantRangeCount = 1;
+    layout_info.pPushConstantRanges    = &sky_pc;
+
+    if (vkCreatePipelineLayout(impl.device, &layout_info, nullptr, &impl.skybox_pipeline_layout) != VK_SUCCESS) {
+        vkDestroyShaderModule(impl.device, frag_mod, nullptr);
+        vkDestroyShaderModule(impl.device, vert_mod, nullptr);
+        std::cerr << "[ArchitectureViewerApp] Failed to create skybox pipeline layout.\n";
+        return;
+    }
+
+    VkGraphicsPipelineCreateInfo pipeline_info{};
+    pipeline_info.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipeline_info.stageCount          = static_cast<std::uint32_t>(stages.size());
+    pipeline_info.pStages             = stages.data();
+    pipeline_info.pVertexInputState   = &vertex_input;
+    pipeline_info.pInputAssemblyState = &input_assembly;
+    pipeline_info.pViewportState      = &viewport_state;
+    pipeline_info.pRasterizationState = &rasterizer;
+    pipeline_info.pMultisampleState   = &multisampling;
+    pipeline_info.pDepthStencilState  = &depth_stencil;
+    pipeline_info.pColorBlendState    = &color_blending;
+    pipeline_info.layout              = impl.skybox_pipeline_layout;
+    pipeline_info.renderPass          = impl.render_pass;
+    pipeline_info.subpass             = 0;
+
+    if (vkCreateGraphicsPipelines(impl.device, VK_NULL_HANDLE, 1, &pipeline_info,
+                                   nullptr, &impl.skybox_pipeline) != VK_SUCCESS) {
+        std::cerr << "[ArchitectureViewerApp] Failed to create skybox pipeline.\n";
+        vkDestroyShaderModule(impl.device, frag_mod, nullptr);
+        vkDestroyShaderModule(impl.device, vert_mod, nullptr);
+        return;
+    }
+
+    vkDestroyShaderModule(impl.device, frag_mod, nullptr);
+    vkDestroyShaderModule(impl.device, vert_mod, nullptr);
+    impl.skybox_enabled = true;
+    std::cout << "[ArchitectureViewerApp] Skybox pipeline created.\n";
+}
+
+// Shadow map image, view, comparison sampler, depth render pass, and framebuffer.
+// Created once (resolution-independent). Always built so binding 4 has a valid
+// descriptor; the actual shadow test is gated by ubo.shadow_enabled.
+void createShadowResources(ArchitectureViewerApp::Impl& impl) {
+    constexpr VkFormat kShadowFormat = VK_FORMAT_D32_SFLOAT;
+
+    // -- Depth image (sampled) -------------------------------------------------
+    VkImageCreateInfo image_info{};
+    image_info.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image_info.imageType     = VK_IMAGE_TYPE_2D;
+    image_info.extent        = {kShadowMapSize, kShadowMapSize, 1};
+    image_info.mipLevels     = 1;
+    image_info.arrayLayers   = 1;
+    image_info.format        = kShadowFormat;
+    image_info.tiling        = VK_IMAGE_TILING_OPTIMAL;
+    image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    image_info.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    image_info.samples       = VK_SAMPLE_COUNT_1_BIT;
+    image_info.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+    // Image/view/sampler are mandatory: binding 4 requires a valid shadow descriptor
+    // even when shadow rendering is off. Failure here is fatal for the viewer.
+    if (vkCreateImage(impl.device, &image_info, nullptr, &impl.shadow_image) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create shadow image.");
+    }
+
+    VkMemoryRequirements mem_reqs{};
+    vkGetImageMemoryRequirements(impl.device, impl.shadow_image, &mem_reqs);
+    VkMemoryAllocateInfo alloc_info{};
+    alloc_info.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc_info.allocationSize  = mem_reqs.size;
+    alloc_info.memoryTypeIndex = findMemoryType(impl.physical_device, mem_reqs.memoryTypeBits,
+                                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (vkAllocateMemory(impl.device, &alloc_info, nullptr, &impl.shadow_memory) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate shadow memory.");
+    }
+    vkBindImageMemory(impl.device, impl.shadow_image, impl.shadow_memory, 0);
+
+    VkImageViewCreateInfo view_info{};
+    view_info.sType                       = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view_info.image                       = impl.shadow_image;
+    view_info.viewType                    = VK_IMAGE_VIEW_TYPE_2D;
+    view_info.format                      = kShadowFormat;
+    view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    view_info.subresourceRange.levelCount = 1;
+    view_info.subresourceRange.layerCount = 1;
+    if (vkCreateImageView(impl.device, &view_info, nullptr, &impl.shadow_view) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create shadow image view.");
+    }
+
+    // -- Comparison sampler (sampler2DShadow) ----------------------------------
+    // CLAMP_TO_BORDER with an opaque-white border so depth==1.0 outside the map
+    // (i.e. the PCF comparison returns "lit" for fragments past the frustum edge).
+    VkSamplerCreateInfo sampler_info{};
+    sampler_info.sType         = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sampler_info.magFilter     = VK_FILTER_LINEAR;
+    sampler_info.minFilter     = VK_FILTER_LINEAR;
+    sampler_info.mipmapMode    = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sampler_info.addressModeU  = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    sampler_info.addressModeV  = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    sampler_info.addressModeW  = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    sampler_info.borderColor   = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+    sampler_info.compareEnable = VK_TRUE;
+    sampler_info.compareOp     = VK_COMPARE_OP_LESS_OR_EQUAL;
+    sampler_info.maxLod        = 0.0f;
+    if (vkCreateSampler(impl.device, &sampler_info, nullptr, &impl.shadow_sampler) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create shadow sampler.");
+    }
+
+    // -- Depth-only render pass ------------------------------------------------
+    VkAttachmentDescription depth_attach{};
+    depth_attach.format         = kShadowFormat;
+    depth_attach.samples        = VK_SAMPLE_COUNT_1_BIT;
+    depth_attach.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depth_attach.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+    depth_attach.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depth_attach.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depth_attach.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+    depth_attach.finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
+    VkAttachmentReference depth_ref{};
+    depth_ref.attachment = 0;
+    depth_ref.layout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount    = 0;
+    subpass.pDepthStencilAttachment = &depth_ref;
+
+    // Sync: previous frame's fragment reads must finish before this write;
+    // this write must finish before the main pass samples it.
+    std::array<VkSubpassDependency, 2> deps{};
+    deps[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
+    deps[0].dstSubpass    = 0;
+    deps[0].srcStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    deps[0].dstStageMask  = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    deps[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    deps[1].srcSubpass    = 0;
+    deps[1].dstSubpass    = VK_SUBPASS_EXTERNAL;
+    deps[1].srcStageMask  = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    deps[1].dstStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    deps[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    VkRenderPassCreateInfo rp_info{};
+    rp_info.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rp_info.attachmentCount = 1;
+    rp_info.pAttachments    = &depth_attach;
+    rp_info.subpassCount    = 1;
+    rp_info.pSubpasses      = &subpass;
+    rp_info.dependencyCount = static_cast<std::uint32_t>(deps.size());
+    rp_info.pDependencies   = deps.data();
+    if (vkCreateRenderPass(impl.device, &rp_info, nullptr, &impl.shadow_render_pass) != VK_SUCCESS) {
+        std::cerr << "[ArchitectureViewerApp] Shadow render pass failed; shadows disabled.\n";
+        return;
+    }
+
+    VkFramebufferCreateInfo fb_info{};
+    fb_info.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fb_info.renderPass      = impl.shadow_render_pass;
+    fb_info.attachmentCount = 1;
+    fb_info.pAttachments    = &impl.shadow_view;
+    fb_info.width           = kShadowMapSize;
+    fb_info.height          = kShadowMapSize;
+    fb_info.layers          = 1;
+    if (vkCreateFramebuffer(impl.device, &fb_info, nullptr, &impl.shadow_framebuffer) != VK_SUCCESS) {
+        std::cerr << "[ArchitectureViewerApp] Shadow framebuffer failed; shadows disabled.\n";
+        return;
+    }
+
+    // One-time transition UNDEFINED -> DEPTH_STENCIL_READ_ONLY_OPTIMAL so the image
+    // layout matches its descriptor even before the first shadow pass runs (shadows
+    // start disabled, so the render pass that would otherwise set this layout is skipped).
+    {
+        const VkCommandBuffer cmd = beginSingleTimeCommands(impl.device, impl.transfer_pool);
+        VkImageMemoryBarrier b{};
+        b.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout        = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image            = impl.shadow_image;
+        b.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+        b.srcAccessMask    = 0;
+        b.dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &b);
+        endSingleTimeCommands(impl.device, impl.graphics_queue, impl.transfer_pool, cmd);
+    }
+
+    impl.shadow_supported = true;
+}
+
+void createShadowPipeline(ArchitectureViewerApp::Impl& impl) {
+    if (!impl.shadow_supported) { return; }
+    fs::path vert_path = impl.compiledShaderPath("shadow.vert");
+    fs::path frag_path = impl.compiledShaderPath("shadow.frag");
+    if (!fs::exists(vert_path) || !fs::exists(frag_path)) {
+        std::cerr << "[ArchitectureViewerApp] Shadow shaders not found; shadows disabled.\n";
+        impl.shadow_supported = false;
+        return;
+    }
+    VkShaderModule vert_mod = createShaderModule(impl.device, readBinaryFile(vert_path));
+    VkShaderModule frag_mod = createShaderModule(impl.device, readBinaryFile(frag_path));
+
+    std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
+    stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vert_mod;
+    stages[0].pName  = "main";
+    stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = frag_mod;
+    stages[1].pName  = "main";
+
+    // Same vertex layout as the main pass (shadow.vert only reads location 0).
+    const VkVertexInputBindingDescription binding = vertexBindingDescription();
+    const auto attributes = vertexAttributeDescriptions();
+    VkPipelineVertexInputStateCreateInfo vertex_input{};
+    vertex_input.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertex_input.vertexBindingDescriptionCount   = 1;
+    vertex_input.pVertexBindingDescriptions      = &binding;
+    vertex_input.vertexAttributeDescriptionCount = static_cast<std::uint32_t>(attributes.size());
+    vertex_input.pVertexAttributeDescriptions    = attributes.data();
+
+    VkPipelineInputAssemblyStateCreateInfo input_assembly{};
+    input_assembly.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkViewport viewport{};
+    viewport.width    = static_cast<float>(kShadowMapSize);
+    viewport.height   = static_cast<float>(kShadowMapSize);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    VkRect2D scissor{};
+    scissor.extent = {kShadowMapSize, kShadowMapSize};
+    VkPipelineViewportStateCreateInfo viewport_state{};
+    viewport_state.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewport_state.viewportCount = 1;
+    viewport_state.pViewports    = &viewport;
+    viewport_state.scissorCount  = 1;
+    viewport_state.pScissors     = &scissor;
+
+    // Depth bias reduces shadow acne; front-face culling reduces peter-panning.
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.polygonMode             = VK_POLYGON_MODE_FILL;
+    rasterizer.lineWidth               = 1.0f;
+    rasterizer.cullMode                = VK_CULL_MODE_FRONT_BIT;
+    rasterizer.frontFace               = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.depthBiasEnable         = VK_TRUE;
+    rasterizer.depthBiasConstantFactor = 1.5f;
+    rasterizer.depthBiasSlopeFactor    = 2.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo depth_stencil{};
+    depth_stencil.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depth_stencil.depthTestEnable  = VK_TRUE;
+    depth_stencil.depthWriteEnable = VK_TRUE;
+    depth_stencil.depthCompareOp   = VK_COMPARE_OP_LESS;
+
+    // No color attachments in the depth-only pass.
+    VkPipelineColorBlendStateCreateInfo color_blending{};
+    color_blending.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    color_blending.attachmentCount = 0;
+
+    VkPushConstantRange pc{};
+    pc.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pc.offset     = 0;
+    pc.size       = sizeof(ShadowPushConstants);
+    VkPipelineLayoutCreateInfo layout_info{};
+    layout_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layout_info.pushConstantRangeCount = 1;
+    layout_info.pPushConstantRanges    = &pc;
+    if (vkCreatePipelineLayout(impl.device, &layout_info, nullptr, &impl.shadow_pipeline_layout) != VK_SUCCESS) {
+        vkDestroyShaderModule(impl.device, frag_mod, nullptr);
+        vkDestroyShaderModule(impl.device, vert_mod, nullptr);
+        impl.shadow_supported = false;
+        return;
+    }
+
+    VkGraphicsPipelineCreateInfo pipeline_info{};
+    pipeline_info.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipeline_info.stageCount          = static_cast<std::uint32_t>(stages.size());
+    pipeline_info.pStages             = stages.data();
+    pipeline_info.pVertexInputState   = &vertex_input;
+    pipeline_info.pInputAssemblyState = &input_assembly;
+    pipeline_info.pViewportState      = &viewport_state;
+    pipeline_info.pRasterizationState = &rasterizer;
+    pipeline_info.pMultisampleState   = &multisampling;
+    pipeline_info.pDepthStencilState  = &depth_stencil;
+    pipeline_info.pColorBlendState    = &color_blending;
+    pipeline_info.layout              = impl.shadow_pipeline_layout;
+    pipeline_info.renderPass          = impl.shadow_render_pass;
+    pipeline_info.subpass             = 0;
+    if (vkCreateGraphicsPipelines(impl.device, VK_NULL_HANDLE, 1, &pipeline_info,
+                                   nullptr, &impl.shadow_pipeline) != VK_SUCCESS) {
+        std::cerr << "[ArchitectureViewerApp] Shadow pipeline creation failed; shadows disabled.\n";
+        vkDestroyShaderModule(impl.device, frag_mod, nullptr);
+        vkDestroyShaderModule(impl.device, vert_mod, nullptr);
+        impl.shadow_supported = false;
+        return;
+    }
+
+    vkDestroyShaderModule(impl.device, frag_mod, nullptr);
+    vkDestroyShaderModule(impl.device, vert_mod, nullptr);
+    std::cout << "[ArchitectureViewerApp] Shadow pipeline created.\n";
+}
+
 void createDepthResources(ArchitectureViewerApp::Impl& impl) {
     VkImageCreateInfo image_info{};
     image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -1748,71 +2648,45 @@ void createPerImagePresentSemaphores(ArchitectureViewerApp::Impl& impl) {
 }
 
 void createDescriptorPoolAndSets(ArchitectureViewerApp::Impl& impl) {
-    constexpr std::uint32_t kTextureSetCapacity = 8U;
+    // Pool capacity: 32 sets with 1 UBO + 6 samplers
+    // (albedo, MR, normal, shadow, sky cubemap, sky equirect) each.
+    constexpr std::uint32_t kMaxSets = 32U;
     std::array<VkDescriptorPoolSize, 2> pool_sizes{};
-    pool_sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    pool_sizes[0].descriptorCount = static_cast<std::uint32_t>(kFramesInFlight) * kTextureSetCapacity;
-    pool_sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    pool_sizes[1].descriptorCount = static_cast<std::uint32_t>(kFramesInFlight) * kTextureSetCapacity;
+    pool_sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    pool_sizes[0].descriptorCount = kMaxSets;
+    pool_sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    pool_sizes[1].descriptorCount = kMaxSets * 6U;  // 6 texture bindings per set
 
     VkDescriptorPoolCreateInfo pool_info{};
-    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_info.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pool_info.poolSizeCount = static_cast<std::uint32_t>(pool_sizes.size());
-    pool_info.pPoolSizes = pool_sizes.data();
-    pool_info.maxSets = static_cast<std::uint32_t>(kFramesInFlight) * kTextureSetCapacity;
+    pool_info.pPoolSizes   = pool_sizes.data();
+    pool_info.maxSets      = kMaxSets;
 
     if (vkCreateDescriptorPool(impl.device, &pool_info, nullptr, &impl.descriptor_pool) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create descriptor pool.");
     }
 
+    // Allocate and write the per-frame default descriptor sets (primitives).
+    // Default textures are bound to all 3 texture slots.
     std::array<VkDescriptorSetLayout, kFramesInFlight> layouts{};
     layouts.fill(impl.descriptor_set_layout);
-
     VkDescriptorSetAllocateInfo alloc_info{};
-    alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    alloc_info.descriptorPool = impl.descriptor_pool;
+    alloc_info.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc_info.descriptorPool     = impl.descriptor_pool;
     alloc_info.descriptorSetCount = static_cast<std::uint32_t>(layouts.size());
-    alloc_info.pSetLayouts = layouts.data();
+    alloc_info.pSetLayouts        = layouts.data();
 
     std::array<VkDescriptorSet, kFramesInFlight> descriptor_sets{};
     if (vkAllocateDescriptorSets(impl.device, &alloc_info, descriptor_sets.data()) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to allocate descriptor sets.");
+        throw std::runtime_error("Failed to allocate frame descriptor sets.");
     }
-
     for (std::size_t index = 0; index < kFramesInFlight; ++index) {
         impl.frames[index].descriptor_set = descriptor_sets[index];
-
-        VkDescriptorBufferInfo buffer_info{};
-        buffer_info.buffer = impl.frames[index].uniform_buffer.buffer;
-        buffer_info.offset = 0;
-        buffer_info.range = sizeof(GlobalUniformData);
-
-        VkDescriptorImageInfo image_info{};
-        image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        image_info.imageView = impl.default_texture.view;
-        image_info.sampler = impl.default_texture.sampler;
-
-        std::array<VkWriteDescriptorSet, 2> writes{};
-        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[0].dstSet = impl.frames[index].descriptor_set;
-        writes[0].dstBinding = 0;
-        writes[0].descriptorCount = 1;
-        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        writes[0].pBufferInfo = &buffer_info;
-
-        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[1].dstSet = impl.frames[index].descriptor_set;
-        writes[1].dstBinding = 1;
-        writes[1].descriptorCount = 1;
-        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[1].pImageInfo = &image_info;
-
-        vkUpdateDescriptorSets(
-            impl.device,
-            static_cast<std::uint32_t>(writes.size()),
-            writes.data(),
-            0,
-            nullptr);
+        writeDescriptorSet4(impl, index, descriptor_sets[index],
+                            impl.default_texture,
+                            impl.default_mr_texture,
+                            impl.default_normal_texture);
     }
     impl.default_texture.descriptor_sets = descriptor_sets;
 }
@@ -1976,10 +2850,21 @@ void loadMannequin(ArchitectureViewerApp::Impl& impl) {
     const fs::path gltf = asset_root / "ue4_mannequin_base_mesh" / "scene.gltf";
     try {
         const fs::path texture_root = asset_root / "ue4_mannequin_base_mesh" / "textures";
-        createTextureFromFile(impl, texture_root / "Plastic_baseColor.png", impl.mannequin_plastic_texture);
-        createTextureFromFile(impl, texture_root / "Metal_baseColor.png", impl.mannequin_metal_texture);
-        allocateTextureDescriptorSets(impl, impl.mannequin_plastic_texture);
-        allocateTextureDescriptorSets(impl, impl.mannequin_metal_texture);
+        // Load albedo, metallic-roughness (ORM), and normal map for each material.
+        createTextureFromFile(impl, texture_root / "Plastic_baseColor.png",        impl.mannequin_plastic_texture);
+        createTextureFromFile(impl, texture_root / "Plastic_metallicRoughness.png", impl.mannequin_plastic_mr_texture);
+        createTextureFromFile(impl, texture_root / "Plastic_normal.png",            impl.mannequin_plastic_normal_texture);
+        createTextureFromFile(impl, texture_root / "Metal_baseColor.png",           impl.mannequin_metal_texture);
+        createTextureFromFile(impl, texture_root / "Metal_metallicRoughness.png",   impl.mannequin_metal_mr_texture);
+        createTextureFromFile(impl, texture_root / "Metal_normal.png",              impl.mannequin_metal_normal_texture);
+
+        // Allocate combined PBR descriptor sets (albedo + MR + normal in one set).
+        allocatePbrMaterialSets(impl,
+            impl.mannequin_plastic_texture, impl.mannequin_plastic_mr_texture,
+            impl.mannequin_plastic_normal_texture, impl.mannequin_plastic_mat_sets);
+        allocatePbrMaterialSets(impl,
+            impl.mannequin_metal_texture, impl.mannequin_metal_mr_texture,
+            impl.mannequin_metal_normal_texture, impl.mannequin_metal_mat_sets);
 
         // UE4 mannequin: Y height ≈ 182.53 cm → scale to exactly 1.80 m
         constexpr float kMannequinHeight = 182.53f;
@@ -1989,11 +2874,7 @@ void loadMannequin(ArchitectureViewerApp::Impl& impl) {
             MeshResource resource;
             uploadMesh(impl, md, resource);
             resource.material_name = md.material_name;
-            const bool is_metal = (md.material_name.find("Metal") != std::string::npos
-                                || md.material_name.find("metal") != std::string::npos);
-            resource.descriptor_sets = is_metal
-                ? impl.mannequin_metal_texture.descriptor_sets
-                : impl.mannequin_plastic_texture.descriptor_sets;
+            // descriptor_sets unused; material resolved by name in recordCommandBuffer.
             impl.mannequin_meshes.push_back(std::move(resource));
         }
         impl.mannequin_loaded = !impl.mannequin_meshes.empty();
@@ -2054,15 +2935,111 @@ void cleanupMeshes(ArchitectureViewerApp::Impl& impl) {
     }
     impl.mannequin_meshes.clear();
     impl.mannequin_loaded = false;
+    // Mannequin PBR material sets are owned by the descriptor pool; not freed individually.
+}
+
+// Build the directional light view-projection matrix: an orthographic frustum
+// aimed along `light_dir` (travel direction), centred on the origin, covering
+// ±radius. Vulkan conventions: column-major, Y-flipped, depth range [0,1].
+Eigen::Matrix4f computeLightSpaceMatrix(const Eigen::Vector3d& light_dir, double radius) {
+    Eigen::Vector3d f = light_dir.normalized();          // forward (light → scene)
+    const double dist = 2.5 * radius;
+    const Eigen::Vector3d center = Eigen::Vector3d::Zero();
+    const Eigen::Vector3d eye    = center - f * dist;
+
+    // Choose an up vector not parallel to the light direction.
+    Eigen::Vector3d up = Eigen::Vector3d::UnitZ();
+    if (std::abs(f.dot(up)) > 0.99) { up = Eigen::Vector3d::UnitY(); }
+
+    const Eigen::Vector3d s = f.cross(up).normalized();   // right
+    const Eigen::Vector3d u = s.cross(f);                 // re-orthogonalised up
+
+    Eigen::Matrix4d view = Eigen::Matrix4d::Identity();
+    view.block<1,3>(0,0) = s.transpose();
+    view.block<1,3>(1,0) = u.transpose();
+    view.block<1,3>(2,0) = (-f).transpose();
+    view(0,3) = -s.dot(eye);
+    view(1,3) = -u.dot(eye);
+    view(2,3) =  f.dot(eye);
+
+    const double R    = std::max(radius, 0.1);
+    const double knear = 0.1;
+    const double kfar  = 5.0 * R;
+    Eigen::Matrix4d proj = Eigen::Matrix4d::Zero();
+    proj(0,0) =  1.0 / R;
+    proj(1,1) = -1.0 / R;                 // Y-flip for Vulkan clip space
+    proj(2,2) = -1.0 / (kfar - knear);
+    proj(2,3) = -knear / (kfar - knear);
+    proj(3,3) =  1.0;
+
+    return (proj * view).cast<float>();
 }
 
 void updateUniformBuffer(ArchitectureViewerApp::Impl& impl, const std::size_t frame_index) {
-    GlobalUniformData uniforms{};
-    const auto view = toFloatArray(impl.camera.viewMatrix());
-    const auto projection = toFloatArray(impl.camera.projectionMatrix());
-    std::memcpy(uniforms.view, view.data(), sizeof(uniforms.view));
-    std::memcpy(uniforms.projection, projection.data(), sizeof(uniforms.projection));
-    std::memcpy(impl.frames[frame_index].uniform_buffer.mapped, &uniforms, sizeof(uniforms));
+    GlobalUniformData ubo{};
+
+    const auto view_arr = toFloatArray(impl.camera.viewMatrix());
+    const auto proj_arr = toFloatArray(impl.camera.projectionMatrix());
+    std::memcpy(ubo.view,       view_arr.data(), sizeof(ubo.view));
+    std::memcpy(ubo.projection, proj_arr.data(), sizeof(ubo.projection));
+
+    const auto& li = impl.lighting;
+    ubo.ambient_color[0] = li.ambient_color[0];
+    ubo.ambient_color[1] = li.ambient_color[1];
+    ubo.ambient_color[2] = li.ambient_color[2];
+    ubo.ambient_color[3] = li.ambient_intensity;
+
+    const Eigen::Vector3d cam_pos = impl.camera.position();
+    ubo.camera_pos[0] = static_cast<float>(cam_pos.x());
+    ubo.camera_pos[1] = static_cast<float>(cam_pos.y());
+    ubo.camera_pos[2] = static_cast<float>(cam_pos.z());
+    ubo.camera_pos[3] = 0.0f;
+
+    int light_idx = 0;
+
+    // Directional light (type 0).
+    {
+        auto& gl       = ubo.lights[light_idx++];
+        const float* d = li.dir_dir.data();
+        const float len = std::sqrt(d[0]*d[0] + d[1]*d[1] + d[2]*d[2]);
+        const float inv = (len > 1e-6f) ? 1.0f / len : 1.0f;
+        gl.position[0] = d[0] * inv; gl.position[1] = d[1] * inv;
+        gl.position[2] = d[2] * inv; gl.position[3] = 0.0f;  // w=0 directional
+        gl.color[0]    = li.dir_color[0]; gl.color[1] = li.dir_color[1];
+        gl.color[2]    = li.dir_color[2]; gl.color[3] = li.dir_intensity;
+        gl.direction[0]= d[0]*inv; gl.direction[1]= d[1]*inv;
+        gl.direction[2]= d[2]*inv; gl.direction[3]= 0.0f;
+    }
+
+    // Spotlight (type 2, optional).
+    if (li.spot_on && light_idx < kMaxLights) {
+        auto& gl        = ubo.lights[light_idx++];
+        gl.position[0]  = li.spot_pos[0]; gl.position[1] = li.spot_pos[1];
+        gl.position[2]  = li.spot_pos[2]; gl.position[3] = 2.0f;  // w=2 spot
+        gl.color[0]     = li.spot_color[0]; gl.color[1] = li.spot_color[1];
+        gl.color[2]     = li.spot_color[2]; gl.color[3] = li.spot_intensity;
+        const float* sd = li.spot_dir.data();
+        const float slen = std::sqrt(sd[0]*sd[0] + sd[1]*sd[1] + sd[2]*sd[2]);
+        const float sinv = (slen > 1e-6f) ? 1.0f / slen : 1.0f;
+        gl.direction[0] = sd[0]*sinv; gl.direction[1] = sd[1]*sinv;
+        gl.direction[2] = sd[2]*sinv; gl.direction[3] = li.spot_range;
+        constexpr float kDegToRad = 3.14159265f / 180.0f;
+        gl.spotAngles[0] = std::cos(li.spot_inner_deg * kDegToRad);
+        gl.spotAngles[1] = std::cos(li.spot_outer_deg * kDegToRad);
+    }
+
+    ubo.light_count = light_idx;
+
+    // Directional shadow map: compute the light VP from the directional light dir,
+    // cache it for the shadow depth pass, and write the shadow control fields.
+    const Eigen::Vector3d ld(li.dir_dir[0], li.dir_dir[1], li.dir_dir[2]);
+    impl.cached_light_vp = computeLightSpaceMatrix(ld, impl.shadow_scene_radius);
+    const auto lvp_arr = toFloatArray(impl.cached_light_vp);
+    std::memcpy(ubo.light_space_matrix, lvp_arr.data(), sizeof(ubo.light_space_matrix));
+    ubo.shadow_enabled = (impl.ui_shadow_enabled && impl.shadow_supported) ? 1 : 0;
+    ubo.shadow_bias    = impl.ui_shadow_bias;
+
+    std::memcpy(impl.frames[frame_index].uniform_buffer.mapped, &ubo, sizeof(ubo));
 }
 
 void recordCommandBuffer(
@@ -2076,6 +3053,70 @@ void recordCommandBuffer(
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     if (vkBeginCommandBuffer(command_buffer, &begin_info) != VK_SUCCESS) {
         throw std::runtime_error("Failed to begin command buffer.");
+    }
+
+    // --- SHADOW DEPTH PASS (directional light) -------------------------------
+    // Renders scene geometry into the shadow map from the light's point of view.
+    // Runs before the main pass; the render pass dependency transitions the depth
+    // image to DEPTH_STENCIL_READ_ONLY_OPTIMAL for sampling in primitive.frag.
+    if (impl.shadow_supported && impl.ui_shadow_enabled
+        && impl.shadow_pipeline != VK_NULL_HANDLE) {
+        VkClearValue shadow_clear{};
+        shadow_clear.depthStencil = {1.0f, 0};
+        VkRenderPassBeginInfo sp{};
+        sp.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        sp.renderPass        = impl.shadow_render_pass;
+        sp.framebuffer       = impl.shadow_framebuffer;
+        sp.renderArea.offset = {0, 0};
+        sp.renderArea.extent = {kShadowMapSize, kShadowMapSize};
+        sp.clearValueCount   = 1;
+        sp.pClearValues      = &shadow_clear;
+        vkCmdBeginRenderPass(command_buffer, &sp, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, impl.shadow_pipeline);
+
+        const auto lvp = toFloatArray(impl.cached_light_vp);
+        const auto drawShadow = [&](const VkBuffer vbuf, const VkBuffer ibuf,
+                                    const std::uint32_t idx_count,
+                                    const std::array<float, 16>& model) {
+            ShadowPushConstants pc{};
+            std::memcpy(pc.light_space_vp, lvp.data(), sizeof(pc.light_space_vp));
+            std::memcpy(pc.model, model.data(), sizeof(pc.model));
+            vkCmdPushConstants(command_buffer, impl.shadow_pipeline_layout,
+                VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
+            const VkBuffer vbs[] = {vbuf};
+            constexpr VkDeviceSize offs[] = {0};
+            vkCmdBindVertexBuffers(command_buffer, 0, 1, vbs, offs);
+            vkCmdBindIndexBuffer(command_buffer, ibuf, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(command_buffer, idx_count, 1, 0, 0, 0);
+        };
+
+        // Opaque vehicle primitives (skip transparent envelopes, reference geometry, and
+        // the flat ground plane — it is a shadow receiver, not a useful caster).
+        for (const auto& instance : impl.instances) {
+            if (!instance.visible || instance.color[3] < 0.99f) { continue; }
+            if (instance.source_element_type == "ReferenceAxis"
+             || instance.source_element_type == "ReferenceGrid"
+             || instance.source_element_type == "GroundPlane") { continue; }
+            const auto mesh_it = impl.meshes.find(instance.primitive_type);
+            if (mesh_it == impl.meshes.end()) { continue; }
+            const auto model = toFloatArray(modelMatrixForInstance(instance));
+            drawShadow(mesh_it->second.vertex_buffer.buffer,
+                       mesh_it->second.index_buffer.buffer,
+                       mesh_it->second.index_count, model);
+        }
+        // Mannequin meshes.
+        if (impl.mannequin_loaded) {
+            std::array<float, 16> mann_model{};
+            mann_model[0] = mann_model[5] = mann_model[10] = mann_model[15] = 1.0f;
+            mann_model[12] = static_cast<float>(impl.mannequin_world_pos.x());
+            mann_model[13] = static_cast<float>(impl.mannequin_world_pos.y());
+            mann_model[14] = static_cast<float>(impl.mannequin_world_pos.z());
+            for (const auto& mesh : impl.mannequin_meshes) {
+                drawShadow(mesh.vertex_buffer.buffer, mesh.index_buffer.buffer,
+                           mesh.index_count, mann_model);
+            }
+        }
+        vkCmdEndRenderPass(command_buffer);
     }
 
     std::array<VkClearValue, 3> clear_values{};
@@ -2094,6 +3135,27 @@ void recordCommandBuffer(
     render_pass_info.pClearValues = clear_values.data();
 
     vkCmdBeginRenderPass(command_buffer, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
+
+    // --- SKYBOX (drawn first so its far-plane depth is overwritten by geometry) ---
+    // sky.mode == 0 (Off) skips the draw entirely, leaving the solid clear color.
+    // The skybox is rendered during capture too, so exported PNGs include it.
+    if (impl.skybox_enabled && impl.skybox_pipeline != VK_NULL_HANDLE
+        && impl.sky.mode != 0) {
+        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, impl.skybox_pipeline);
+        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            impl.skybox_pipeline_layout, 0, 1,
+            &impl.frames[frame_index].descriptor_set, 0, nullptr);
+        SkyPushConstants sky_push{};
+        sky_push.sky_color[0] = impl.sky.top_color[0];
+        sky_push.sky_color[1] = impl.sky.top_color[1];
+        sky_push.sky_color[2] = impl.sky.top_color[2];
+        sky_push.sky_color[3] = 1.0f;
+        sky_push.sky_mode = impl.sky.mode;
+        vkCmdPushConstants(command_buffer, impl.skybox_pipeline_layout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(SkyPushConstants), &sky_push);
+        vkCmdDraw(command_buffer, 36, 1, 0, 0);  // hardcoded cube vertices in shader
+    }
 
     VkDescriptorSet bound_descriptor_set = VK_NULL_HANDLE;
     const auto bindDescriptorSet = [&](const VkDescriptorSet set) {
@@ -2144,6 +3206,8 @@ void recordCommandBuffer(
         const auto model = toFloatArray(modelMatrixForInstance(instance));
         std::memcpy(push.model, model.data(), sizeof(push.model));
         std::memcpy(push.color, instance.color.data(), sizeof(push.color));
+        push.roughness = 0.7f; push.metallic = 0.0f;
+        push.use_pbr = 0; push.has_normal_map = 0;
 
         vkCmdPushConstants(
             command_buffer,
@@ -2161,9 +3225,8 @@ void recordCommandBuffer(
         if (instance.color[3] >= 0.99f) { drawInstance(instance, bound_pipeline); }
     }
 
-    // Human reference mannequin: neutral base colors with glTF textures used as surface detail.
+    // Human reference mannequin: PBR rendering with per-material texture sets.
     if (impl.mannequin_loaded) {
-        constexpr std::array<float, 4> kBaseColor = {0.55f, 0.56f, 0.58f, 1.0f};
         if (impl.graphics_pipeline != bound_pipeline) {
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, impl.graphics_pipeline);
             bound_pipeline = impl.graphics_pipeline;
@@ -2173,14 +3236,21 @@ void recordCommandBuffer(
         mann_push.model[12] = static_cast<float>(impl.mannequin_world_pos.x());
         mann_push.model[13] = static_cast<float>(impl.mannequin_world_pos.y());
         mann_push.model[14] = static_cast<float>(impl.mannequin_world_pos.z());
+        mann_push.color[0] = mann_push.color[1] = mann_push.color[2] = mann_push.color[3] = 1.0f;
+        mann_push.use_pbr      = 1;  // Cook-Torrance PBR path
+        mann_push.has_normal_map = 1;  // use normal maps from texture slot 3
 
         for (const auto& mesh : impl.mannequin_meshes) {
-            bindDescriptorSet(mesh.descriptor_sets[frame_index]);
+            const bool is_metal = (mesh.material_name.find("Metal") != std::string::npos
+                                || mesh.material_name.find("metal") != std::string::npos);
+            const VkDescriptorSet mat_set = is_metal
+                ? impl.mannequin_metal_mat_sets[frame_index]
+                : impl.mannequin_plastic_mat_sets[frame_index];
+            bindDescriptorSet(mat_set);
             const VkBuffer vbufs[] = {mesh.vertex_buffer.buffer};
             constexpr VkDeviceSize voffsets[] = {0};
             vkCmdBindVertexBuffers(command_buffer, 0, 1, vbufs, voffsets);
             vkCmdBindIndexBuffer(command_buffer, mesh.index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-            std::memcpy(mann_push.color, kBaseColor.data(), sizeof(mann_push.color));
             vkCmdPushConstants(command_buffer, impl.pipeline_layout,
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                 0, sizeof(PushConstants), &mann_push);
@@ -2220,6 +3290,7 @@ void recreateSwapchain(ArchitectureViewerApp::Impl& impl) {
     createColorResources(impl);
     createRenderPass(impl);
     createGraphicsPipeline(impl);
+    createSkyboxPipeline(impl);
     createDepthResources(impl);
     createFramebuffers(impl);
     createPerImagePresentSemaphores(impl);
@@ -2230,6 +3301,21 @@ void recreateSwapchain(ArchitectureViewerApp::Impl& impl) {
 
 void updateInput(ArchitectureViewerApp::Impl& impl) {
     glfwPollEvents();
+
+    // 'H' toggles the GUI overlay (edge-detected so one press = one toggle). Ignored
+    // while a text field has keyboard focus so typing 'h' doesn't hide the panels.
+    {
+        const bool h_down = glfwGetKey(impl.window, GLFW_KEY_H) == GLFW_PRESS;
+#ifdef HEXAARCH_HAS_IMGUI
+        const bool kb_captured = ImGui::GetIO().WantCaptureKeyboard;
+#else
+        const bool kb_captured = false;
+#endif
+        if (h_down && !impl.h_key_was_down && !kb_captured) {
+            impl.ui_show_gui = !impl.ui_show_gui;
+        }
+        impl.h_key_was_down = h_down;
+    }
 
     double cursor_x = 0.0;
     double cursor_y = 0.0;
@@ -2351,9 +3437,44 @@ void cleanupViewer(ArchitectureViewerApp::Impl& impl) {
         vkDeviceWaitIdle(impl.device);
         cleanupImGui(impl);
         cleanupMeshes(impl);
+        destroyTexture(impl.device, impl.mannequin_metal_normal_texture);
+        destroyTexture(impl.device, impl.mannequin_metal_mr_texture);
         destroyTexture(impl.device, impl.mannequin_metal_texture);
+        destroyTexture(impl.device, impl.mannequin_plastic_normal_texture);
+        destroyTexture(impl.device, impl.mannequin_plastic_mr_texture);
         destroyTexture(impl.device, impl.mannequin_plastic_texture);
+        destroyTexture(impl.device, impl.default_normal_texture);
+        destroyTexture(impl.device, impl.default_mr_texture);
         destroyTexture(impl.device, impl.default_texture);
+        destroyTexture(impl.device, impl.sky_equirect);
+        destroyTexture(impl.device, impl.sky_cubemap);
+
+        // Shadow resources (swapchain-independent — destroyed once here).
+        if (impl.shadow_pipeline != VK_NULL_HANDLE) {
+            vkDestroyPipeline(impl.device, impl.shadow_pipeline, nullptr);
+        }
+        if (impl.shadow_pipeline_layout != VK_NULL_HANDLE) {
+            vkDestroyPipelineLayout(impl.device, impl.shadow_pipeline_layout, nullptr);
+        }
+        if (impl.shadow_framebuffer != VK_NULL_HANDLE) {
+            vkDestroyFramebuffer(impl.device, impl.shadow_framebuffer, nullptr);
+        }
+        if (impl.shadow_render_pass != VK_NULL_HANDLE) {
+            vkDestroyRenderPass(impl.device, impl.shadow_render_pass, nullptr);
+        }
+        if (impl.shadow_sampler != VK_NULL_HANDLE) {
+            vkDestroySampler(impl.device, impl.shadow_sampler, nullptr);
+        }
+        if (impl.shadow_view != VK_NULL_HANDLE) {
+            vkDestroyImageView(impl.device, impl.shadow_view, nullptr);
+        }
+        if (impl.shadow_image != VK_NULL_HANDLE) {
+            vkDestroyImage(impl.device, impl.shadow_image, nullptr);
+        }
+        if (impl.shadow_memory != VK_NULL_HANDLE) {
+            vkFreeMemory(impl.device, impl.shadow_memory, nullptr);
+        }
+
         destroySwapchainResources(impl);
     }
 
@@ -2575,6 +3696,7 @@ void initializeSceneCamera(ArchitectureViewerApp::Impl& impl) {
     for (const auto& inst : impl.instances) {
         if (inst.source_element_type == "ReferenceAxis"
          || inst.source_element_type == "ReferenceGrid"
+         || inst.source_element_type == "GroundPlane"
          || inst.source_element_type == "HumanReference") {
             continue;
         }
@@ -2584,6 +3706,7 @@ void initializeSceneCamera(ArchitectureViewerApp::Impl& impl) {
     impl.camera.setViewport(static_cast<float>(impl.swapchain_extent.width), static_cast<float>(impl.swapchain_extent.height));
     impl.camera.setPerspective(60.0f * 3.14159265358979323846f / 180.0f, 0.1f, 1000.0f);
     impl.camera.reset(Eigen::Vector3d::Zero(), std::max(radius * 2.5, 6.0));
+    impl.shadow_scene_radius = std::max(radius * 1.3, 6.0);  // ortho half-extent for shadow VP
 }
 
 void initViewerRuntime(ArchitectureViewerApp::Impl& impl) {
@@ -2597,12 +3720,19 @@ void initViewerRuntime(ArchitectureViewerApp::Impl& impl) {
     createFrameResources(impl);
     createTransferPool(impl);
     createDefaultTexture(impl);
+    createDefaultMrTexture(impl);
+    createDefaultNormalTexture(impl);
+    // Shadow + skybox textures must exist before descriptor sets (bindings 4-6 reference them).
+    createShadowResources(impl);
+    createShadowPipeline(impl);
+    createSkyboxTextures(impl);
     createDescriptorPoolAndSets(impl);
     createSwapchain(impl);
     createSwapchainImageViews(impl);
     createColorResources(impl);
     createRenderPass(impl);
     createGraphicsPipeline(impl);
+    createSkyboxPipeline(impl);
     createDepthResources(impl);
     createFramebuffers(impl);
     createPerImagePresentSemaphores(impl);
@@ -2617,6 +3747,10 @@ void applyVisibilityFlags(ArchitectureViewerApp::Impl& impl) {
             instance.visible = impl.ui_show_axes;
         } else if (instance.source_element_type == "ReferenceGrid") {
             instance.visible = impl.ui_show_grid;
+        } else if (instance.source_element_type == "GroundPlane") {
+            instance.visible = impl.ui_show_ground;
+            instance.color = {impl.ground_color[0], impl.ground_color[1],
+                              impl.ground_color[2], 1.0f};  // live base-color edit
         } else if (instance.source_element_type == "HumanReference") {
             instance.visible = false;  // glTF mannequin renders separately; phantom never shown
         } else {
@@ -2866,6 +4000,13 @@ void renderUiPanel(ArchitectureViewerApp::Impl& impl) {
         bool changed = false;
         changed |= ImGui::Checkbox("Reference Axes", &impl.ui_show_axes);
         changed |= ImGui::Checkbox("Reference Grid", &impl.ui_show_grid);
+        changed |= ImGui::Checkbox("Ground Plane", &impl.ui_show_ground);
+        if (impl.ui_show_ground) {
+            ImGui::SetNextItemWidth(panel_w - std::round(20.0f * eff_scale));
+            if (ImGui::ColorEdit3("Ground", impl.ground_color.data(), ImGuiColorEditFlags_Float)) {
+                changed = true;  // re-apply so the live color reaches the instance
+            }
+        }
         ImGui::Separator();
         ImGui::Checkbox("Labels", &impl.ui_show_labels);
         ImGui::Separator();
@@ -3060,19 +4201,29 @@ void renderResultPanel(ArchitectureViewerApp::Impl& impl) {
 void renderRenderPanel(ArchitectureViewerApp::Impl& impl) {
 #ifdef HEXAARCH_HAS_IMGUI
     const float eff_scale = impl.ui_dpi_scale * impl.ui_scale;
-    const float panel_w   = std::round(260.0f * eff_scale);
+    const float panel_w   = std::round(360.0f * eff_scale);
     const float W         = static_cast<float>(impl.swapchain_extent.width);
+    const float H         = static_cast<float>(impl.swapchain_extent.height);
+    const float top_y     = std::round(165.0f * eff_scale);
+    // Cap height to the visible area so the panel never runs off-screen; ImGui adds
+    // a vertical scrollbar automatically when the (auto-fit) content exceeds the cap.
+    const float max_h     = std::max(150.0f, H - top_y - 10.0f);
+    // Leave room on the right of each labeled widget so labels are never clipped.
+    const float label_room = std::round(130.0f * eff_scale);
 
-    ImGui::SetNextWindowPos(
-        ImVec2(W - panel_w - 10.0f, std::round(165.0f * eff_scale)),
-        ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(panel_w, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(W - panel_w - 10.0f, top_y), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(panel_w, 0.0f), ImVec2(panel_w, max_h));
+    ImGui::SetNextWindowSize(ImVec2(panel_w, 0.0f), ImGuiCond_Always);  // width fixed, height auto (clamped)
     if (ImGui::Begin("Render", nullptr, ImGuiWindowFlags_NoResize)) {
+        // Negative item width = (available - label_room): every slider/coloredit
+        // leaves `label_room` pixels on its right for the label.
+        ImGui::PushItemWidth(-label_room);
+
         // --- Camera direction presets ----------------------------------------
-        ImGui::Text("View direction:");
+        ImGui::TextUnformatted("View direction:");
         constexpr double kHalfPi = 1.5707963267948966;
         constexpr double kPi     = 3.14159265358979324;
-        const float btn_w = std::round(36.0f * eff_scale);
+        const float btn_w = std::round(40.0f * eff_scale);
 
         const auto snapOrigin = [&](double yaw, double pitch) {
             impl.camera.pan(-impl.camera.target());  // move target to (0,0,0)
@@ -3090,22 +4241,88 @@ void renderRenderPanel(ArchitectureViewerApp::Impl& impl) {
         ImGui::SameLine();
         if (ImGui::Button("-Z", ImVec2(btn_w, 0))) { snapOrigin(kHalfPi,     kHalfPi - 0.001); }
 
-        if (ImGui::Button("Perspective", ImVec2(-1, 0))) { snapOrigin(0.75, -0.45); }
+        if (ImGui::Button("Perspective", ImVec2(-1.0f, 0))) { snapOrigin(0.75, -0.45); }
+
+        // Hide the GUI for a clean view; press 'H' to bring it back.
+        if (ImGui::Button("Hide GUI (H)", ImVec2(-1.0f, 0))) { impl.ui_show_gui = false; }
+
+        ImGui::Separator();
+
+        // --- Sky controls ----------------------------------------------------
+        ImGui::TextUnformatted("Sky:");
+        ImGui::RadioButton("Off",        &impl.sky.mode, 0); ImGui::SameLine();
+        ImGui::RadioButton("Gradient",   &impl.sky.mode, 1); ImGui::SameLine();
+        ImGui::RadioButton("Procedural", &impl.sky.mode, 2);
+
+        if (!impl.sky_cubemap_loaded) { ImGui::BeginDisabled(); }
+        ImGui::RadioButton("Cubemap (PNG)", &impl.sky.mode, 3);
+        if (!impl.sky_cubemap_loaded) { ImGui::EndDisabled(); }
+        ImGui::SameLine();
+        if (!impl.sky_equirect_loaded) { ImGui::BeginDisabled(); }
+        ImGui::RadioButton("HDR", &impl.sky.mode, 4);
+        if (!impl.sky_equirect_loaded) { ImGui::EndDisabled(); }
+
+        // Sky color only affects the gradient/procedural modes.
+        if (impl.sky.mode == 1 || impl.sky.mode == 2) {
+            ImGui::ColorEdit3("Sky color", impl.sky.top_color.data(), ImGuiColorEditFlags_Float);
+        }
+
+        ImGui::Separator();
+
+        // --- Lighting controls -----------------------------------------------
+        auto& li = impl.lighting;
+        if (ImGui::CollapsingHeader("Lighting")) {
+            ImGui::ColorEdit3("Ambient",       li.ambient_color.data(), ImGuiColorEditFlags_Float);
+            ImGui::SliderFloat("Amb.intensity", &li.ambient_intensity, 0.0f, 2.0f);
+
+            ImGui::Spacing();
+            ImGui::ColorEdit3("Dir.color",     li.dir_color.data(), ImGuiColorEditFlags_Float);
+            ImGui::SliderFloat("Dir.intensity", &li.dir_intensity, 0.0f, 5.0f);
+            ImGui::SliderFloat3("Dir.direction", li.dir_dir.data(), -1.0f, 1.0f);
+
+            ImGui::Spacing();
+            ImGui::Checkbox("Spotlight", &li.spot_on);
+            if (li.spot_on) {
+                ImGui::ColorEdit3("Spot.color",      li.spot_color.data(), ImGuiColorEditFlags_Float);
+                ImGui::SliderFloat("Spot.intensity", &li.spot_intensity, 0.0f, 10.0f);
+                ImGui::SliderFloat("Spot.range",     &li.spot_range,     1.0f, 50.0f);
+                ImGui::SliderFloat3("Spot.pos",      li.spot_pos.data(), -20.0f, 20.0f);
+                ImGui::SliderFloat3("Spot.dir",      li.spot_dir.data(), -1.0f, 1.0f);
+                ImGui::SliderFloat("Inner angle",    &li.spot_inner_deg, 5.0f, 60.0f);
+                ImGui::SliderFloat("Outer angle",    &li.spot_outer_deg,
+                    li.spot_inner_deg + 1.0f, 90.0f);
+            }
+        }
+
+        // --- Shadow controls (directional light) -----------------------------
+        if (ImGui::CollapsingHeader("Shadows")) {
+            if (!impl.shadow_supported) {
+                ImGui::TextDisabled("Shadow map unavailable.");
+            } else {
+                ImGui::Checkbox("Cast shadows", &impl.ui_shadow_enabled);
+                if (impl.ui_shadow_enabled) {
+                    ImGui::SliderFloat("Depth bias", &impl.ui_shadow_bias, 0.0f, 0.01f, "%.4f");
+                    ImGui::TextDisabled("Cast by the directional light.");
+                }
+            }
+        }
 
         ImGui::Separator();
 
         // --- Image export ----------------------------------------------------
-        ImGui::Text("Export image:");
-        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::TextUnformatted("Export image:");
+        ImGui::SetNextItemWidth(-1.0f);  // full width (hidden label)
         ImGui::InputText("##cappath", impl.capture_path_buf.data(), impl.capture_path_buf.size());
 
-        if (ImGui::Button("Capture PNG", ImVec2(-1, 0))) {
+        if (ImGui::Button("Capture PNG", ImVec2(-1.0f, 0))) {
             impl.capture_requested = true;
             impl.capture_status_message.clear();
         }
         if (!impl.capture_status_message.empty()) {
             ImGui::TextWrapped("%s", impl.capture_status_message.c_str());
         }
+
+        ImGui::PopItemWidth();
     }
     ImGui::End();
 #else
@@ -3123,7 +4340,8 @@ void renderLabels(ArchitectureViewerApp::Impl& impl) {
 
     std::map<std::string, Eigen::Vector3d> label_positions;
     for (const auto& inst : impl.instances) {
-        if (inst.source_element_type == "ReferenceAxis" || inst.source_element_type == "ReferenceGrid") {
+        if (inst.source_element_type == "ReferenceAxis" || inst.source_element_type == "ReferenceGrid"
+         || inst.source_element_type == "GroundPlane") {
             continue;
         }
         if (!inst.source_element_id.empty() && label_positions.count(inst.source_element_id) == 0U) {
@@ -3207,11 +4425,14 @@ void runViewerLoop(ArchitectureViewerApp::Impl& impl) {
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
-        renderUiPanel(impl);
-        renderElementListPanel(impl);
-        renderResultPanel(impl);
-        renderRenderPanel(impl);
-        renderLabels(impl);
+        // When the GUI is hidden ('H'), skip all panels so the draw list is empty.
+        if (impl.ui_show_gui) {
+            renderUiPanel(impl);
+            renderElementListPanel(impl);
+            renderResultPanel(impl);
+            renderRenderPanel(impl);
+            renderLabels(impl);
+        }
         ImGui::Render();
 #endif
         drawFrame(impl);

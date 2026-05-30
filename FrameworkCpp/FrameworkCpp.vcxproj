@@ -28,14 +28,16 @@
     <CustomBuild Include="visualization\shaders\primitive.frag">
       <FileType>Document</FileType>
       <Message>Compiling GLSL shader %(Filename)%(Extension)</Message>
-      <Command>if not exist "$(OutDir)visualization\shaders\compiled" mkdir "$(OutDir)visualization\shaders\compiled"&#x0D;&#x0A;if exist "$(VULKAN_SDK)\Bin\glslc.exe" ("$(VULKAN_SDK)\Bin\glslc.exe" "%(FullPath)" -o "$(OutDir)visualization\shaders\compiled\%(Filename)%(Extension).spv" --target-env=vulkan1.0) else (glslc.exe "%(FullPath)" -o "$(OutDir)visualization\shaders\compiled\%(Filename)%(Extension).spv" --target-env=vulkan1.0)</Command>
+      <Command>if not exist "$(OutDir)visualization\shaders\compiled" mkdir "$(OutDir)visualization\shaders\compiled"
+if exist "$(VULKAN_SDK)\Bin\glslc.exe" ("$(VULKAN_SDK)\Bin\glslc.exe" "%(FullPath)" -o "$(OutDir)visualization\shaders\compiled\%(Filename)%(Extension).spv" --target-env=vulkan1.0) else (glslc.exe "%(FullPath)" -o "$(OutDir)visualization\shaders\compiled\%(Filename)%(Extension).spv" --target-env=vulkan1.0)</Command>
       <AdditionalInputs>%(FullPath)</AdditionalInputs>
       <Outputs>$(OutDir)visualization\shaders\compiled\%(Filename)%(Extension).spv</Outputs>
     </CustomBuild>
     <CustomBuild Include="visualization\shaders\primitive.vert">
       <FileType>Document</FileType>
       <Message>Compiling GLSL shader %(Filename)%(Extension)</Message>
-      <Command>if not exist "$(OutDir)visualization\shaders\compiled" mkdir "$(OutDir)visualization\shaders\compiled"&#x0D;&#x0A;if exist "$(VULKAN_SDK)\Bin\glslc.exe" ("$(VULKAN_SDK)\Bin\glslc.exe" "%(FullPath)" -o "$(OutDir)visualization\shaders\compiled\%(Filename)%(Extension).spv" --target-env=vulkan1.0) else (glslc.exe "%(FullPath)" -o "$(OutDir)visualization\shaders\compiled\%(Filename)%(Extension).spv" --target-env=vulkan1.0)</Command>
+      <Command>if not exist "$(OutDir)visualization\shaders\compiled" mkdir "$(OutDir)visualization\shaders\compiled"
+if exist "$(VULKAN_SDK)\Bin\glslc.exe" ("$(VULKAN_SDK)\Bin\glslc.exe" "%(FullPath)" -o "$(OutDir)visualization\shaders\compiled\%(Filename)%(Extension).spv" --target-env=vulkan1.0) else (glslc.exe "%(FullPath)" -o "$(OutDir)visualization\shaders\compiled\%(Filename)%(Extension).spv" --target-env=vulkan1.0)</Command>
       <AdditionalInputs>%(FullPath)</AdditionalInputs>
       <Outputs>$(OutDir)visualization\shaders\compiled\%(Filename)%(Extension).spv</Outputs>
     </CustomBuild>
@@ -264,7 +266,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;_CONSOLE;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;NOMINMAX;%(PreprocessorDefinitions);_CRT_SECURE_NO_WARNINGS</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)visualization\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include;$(ProjectDir)vcpkg_installed\$(VcpkgTriplet)\include\eigen3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
