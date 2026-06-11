@@ -1100,6 +1100,13 @@ struct ArchitectureViewerApp::Impl {
     bool ui_show_gui = true;
     bool h_key_was_down = false;
 
+    // Auto-rotate: continuously orbits the camera around the scene Z axis at a
+    // constant speed (for recording a turntable GIF). Any user orbit/pan still
+    // applies on top, so the chosen elevation/distance is preserved while spinning.
+    bool   auto_rotate = false;
+    float  auto_rotate_speed_deg = 20.0f;  // deg/sec about Z
+    double auto_rotate_last_time = 0.0;     // glfwGetTime() of last applied step
+
 #ifdef HEXAARCH_HAS_IMGUI
     VkDescriptorPool imgui_pool = VK_NULL_HANDLE;
     float ui_dpi_scale = 1.0f;
@@ -3428,6 +3435,19 @@ void updateInput(ArchitectureViewerApp::Impl& impl) {
         }
 #endif
     }
+
+    // Auto-rotate turntable: advance yaw by a constant angular rate. Uses wall-clock
+    // dt so the speed is frame-rate independent. Applied after manual orbit so the
+    // user can re-aim elevation/distance and the spin continues from there.
+    if (impl.auto_rotate) {
+        const double now = glfwGetTime();
+        double dt = now - impl.auto_rotate_last_time;
+        if (dt < 0.0 || dt > 0.5) { dt = 0.0; }  // clamp first frame / hitches
+        impl.auto_rotate_last_time = now;
+        const double rate = static_cast<double>(impl.auto_rotate_speed_deg)
+                            * 3.14159265358979324 / 180.0;
+        impl.camera.orbit(rate * dt, 0.0);
+    }
 }
 
 void drawFrame(ArchitectureViewerApp::Impl& impl) {
@@ -4305,6 +4325,20 @@ void renderRenderPanel(ArchitectureViewerApp::Impl& impl) {
         if (ImGui::Button("-Z", ImVec2(btn_w, 0))) { snapOrigin(kHalfPi,     kHalfPi - 0.001); }
 
         if (ImGui::Button("Perspective", ImVec2(-1.0f, 0))) { snapOrigin(0.75, -0.45); }
+
+        // --- Auto-rotate turntable (for GIF capture) -------------------------
+        const char* rot_label = impl.auto_rotate ? "Stop rotation" : "Auto-rotate";
+        if (ImGui::Button(rot_label, ImVec2(-1.0f, 0))) {
+            impl.auto_rotate = !impl.auto_rotate;
+            if (impl.auto_rotate) {
+                // Enter perspective on activation, then keep the user's adjustments.
+                snapOrigin(0.75, -0.45);
+                impl.auto_rotate_last_time = glfwGetTime();
+            }
+        }
+        if (impl.auto_rotate) {
+            ImGui::SliderFloat("Speed", &impl.auto_rotate_speed_deg, 5.0f, 120.0f, "%.0f deg/s");
+        }
 
         // Hide the GUI for a clean view; press 'H' to bring it back.
         if (ImGui::Button("Hide GUI (H)", ImVec2(-1.0f, 0))) { impl.ui_show_gui = false; }

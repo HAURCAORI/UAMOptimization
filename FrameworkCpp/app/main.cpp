@@ -55,10 +55,10 @@ enum class CliMode {
 struct CliOptions {
     CliMode mode = CliMode::evaluate;
     std::filesystem::path output_dir = std::filesystem::current_path() / "output";
-    unsigned soo_population_size = 24U;
-    unsigned soo_generations = 40U;
+    unsigned soo_population_size = 48U;
+    unsigned soo_generations = 96U;
     unsigned moo_population_size = 48U;
-    unsigned moo_generations = 60U;
+    unsigned moo_generations = 96U;
     bool visualize = false;
     bool plot_acs = false;
     std::optional<std::filesystem::path> mission_profile_path;  // --mission <profile.json>

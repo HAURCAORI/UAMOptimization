@@ -48,7 +48,7 @@ struct EvaluationContext {
     double battery_pack_efficiency = 0.95;              // pack-level Wh efficiency
     double battery_voltage_nominal = 48.0;              // nominal bus voltage [V]
     double battery_crate_limit = 5.0;                   // peak C-rate during hover [1/h]
-    double mission_time_nominal_min = 30.0;             // required hover endurance [min]; UAM design mission (takeoff + transit hover)
+    double mission_time_nominal_min = 15.0;             // required hover endurance [min]; UAM design mission (takeoff + transit hover)
     double mission_time_emergency_min = 1.0;            // required fault-hover endurance after failure [min]
     double power_auxiliary_w = 500.0;                   // avionics + payload auxiliary draw [W]
 

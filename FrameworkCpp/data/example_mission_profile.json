@@ -1,0 +1,18 @@
+{
+  "name": "city_taxi_round_trip",
+  "payload_mass_kg": 600,
+  "segments": [
+    { "kind": "hover",           "label": "takeoff_pad",   "duration_s": 30 },
+    { "kind": "climb",           "label": "climb_to_300m", "duration_s": 60,  "airspeed_mps": 18, "climb_rate_mps": 5 },
+    { "kind": "cruise",          "label": "outbound",      "duration_s": 360, "airspeed_mps": 45, "altitude_m": 300 },
+    { "kind": "descent",         "label": "descent",       "duration_s": 60,  "airspeed_mps": 18, "climb_rate_mps": -5 },
+    { "kind": "hover",           "label": "landing_pad_1", "duration_s": 30 },
+    { "kind": "hover",           "label": "takeoff_pad_2", "duration_s": 30 },
+    { "kind": "climb",           "label": "climb_to_300m", "duration_s": 60,  "airspeed_mps": 18, "climb_rate_mps": 5 },
+    { "kind": "cruise",          "label": "return",        "duration_s": 360, "airspeed_mps": 45, "altitude_m": 300 },
+    { "kind": "descent",         "label": "descent",       "duration_s": 60,  "airspeed_mps": 18, "climb_rate_mps": -5 },
+    { "kind": "hover",           "label": "landing_pad_2", "duration_s": 30 },
+    { "kind": "reserve_hover",   "label": "20%_reserve",   "duration_s": 240 },
+    { "kind": "emergency_hover", "label": "OEI_diversion", "duration_s": 60,  "worst_fault": true }
+  ]
+}
